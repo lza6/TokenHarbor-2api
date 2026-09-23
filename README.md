@@ -21,17 +21,27 @@ cargo build --release
 
 默认监听 `http://127.0.0.1:47830`。
 
-### 第 2 步：导入账号 Cookie
+### 第 2 步：登录账号（三选一）
 
-面板 `http://127.0.0.1:47830/ui` → 「凭证」页，或直接调 API：
+**方式 A：邮箱密码登录（推荐，自动入库）**
 
 ```bash
-curl -X POST http://127.0.0.1:47830/api/tokens/import \
+curl -X POST http://127.0.0.1:47830/api/tokens/login \
   -H "Content-Type: application/json" \
-  -d '{"cookie":"sb-auth-auth-token.0=...; sb-auth-auth-token.1=...; th_sid=..."}'
+  -d '{"email":"you@example.com","password":"你的密码"}'
 ```
 
-在浏览器登录 tokenharbor.ai → F12 → Network → 请求头里复制完整 `cookie:` 整行（含 `sb-auth-auth-token.0` / `sb-auth-auth-token.1` / `th_sid`）。
+网关直接调用 TokenHarbor 的 Supabase 认证接口（`auth.tokenharbor.ai/auth/v1/token?grant_type=password`）登录并入库。
+
+**方式 B：浏览器登录 + 导入 Cookie**
+
+1. 浏览器打开 tokenharbor.ai → 登录（Google / GitHub / 邮箱）
+2. F12 → Network → 任意请求 → 复制完整 `cookie:` 整行（含 `sb-auth-auth-token.0` / `sb-auth-auth-token.1` / `th_sid`）
+3. 调 `/api/tokens/import` 粘贴导入
+
+**方式 C：启动自动续期**
+
+网关启动时 + 每 50 分钟自动用 refresh_token 换新 access_token（`POST /api/tokens/refresh-all` 可手动触发）。注意：TokenHarbor 服务端对 refresh 后的会话有严格校验，若续期后 API 返回 401，请重新登录导入新 Cookie。
 
 ### 第 3 步：接入客户端
 
@@ -74,6 +84,8 @@ print(resp.choices[0].message.content)
 | `/v1/uploads` | POST | 上传文件换取 storagePath（裸 body + `x-file-name` 头） |
 | `/healthz` | GET | 健康检查 |
 | `/api/tokens/import` | POST | 导入 Cookie（`{"cookie": "..."}`），同值自动去重 |
+| `/api/tokens/login` | POST | 邮箱密码登录（`{"email","password"}`），自动入库 |
+| `/api/tokens/refresh-all` | POST | 手动触发所有凭证续期 |
 | `/api/tokens` | GET | 已导入凭证（掩码 / 健康分 / 冷却状态） |
 | `/api/tokens/check` | POST | 凭证有效性检查（拉取 /api/me/free-tier） |
 | `/api/tokens/delete` | POST | 删除凭证 `{id}` |
@@ -157,6 +169,8 @@ TokenHarbor 站点（Next.js + Supabase + Vercel）核心端点：
 | 语音转写 | ✅ | `/api/direct-chat/transcribe` 直通 |
 | 免费窗口感知 | ✅ | qwen3.8 免费至 2026-09-27，过期自动降级 |
 | 凭证池 | ✅ | 健康分 / 401 冷却 / 轮询换号 |
+| 自动续期 | ✅ | refresh_token 换新 access_token（启动 + 定时 + 手动） |
+| 邮箱登录 | ✅ | Supabase password grant 直接登录入库 |
 | 会话复用 | ✅ | 每线程绑定上游 session，多轮上下文连续 |
 
 ---
