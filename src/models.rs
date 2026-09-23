@@ -82,13 +82,17 @@ pub struct ModelMeta {
     pub reasoning: bool,
     /// 免费窗口结束（None=常驻）
     pub free_until: Option<String>,
+    /// 上下文窗口（tokens，来自官方模型文档）
+    pub context_window: i64,
+    /// 最大输出 tokens（官方文档）
+    pub max_output: i64,
 }
 
 /// 权威底座（与实时快照一致）
 pub fn catalog() -> Vec<ModelMeta> {
     let mut v = Vec::new();
     macro_rules! m {
-        ($surface:expr, $label:expr, $family:expr, $tier:expr, $pi:expr, $po:expr, $free:expr, $inmods:expr, $outmods:expr, $vision:expr, $tools:expr) => {
+        ($surface:expr, $label:expr, $family:expr, $tier:expr, $pi:expr, $po:expr, $free:expr, $inmods:expr, $outmods:expr, $vision:expr, $tools:expr, $ctx:expr, $mo:expr) => {
             v.push(ModelMeta {
                 id: upstream_id($surface, $free),
                 label: $label.into(),
@@ -105,33 +109,35 @@ pub fn catalog() -> Vec<ModelMeta> {
                 tools: true,
                 reasoning: true,
                 free_until: if $free { free_until($surface).map(|s| s.to_string()) } else { None },
+                context_window: $ctx,
+                max_output: $mo,
             });
         };
     }
     // 付费
-    m!("claude-opus-5.5", "Claude Opus 5.5", "anthropic", "frontier", 4.0, 20.0, false, &["text","image","file"], &["text"], true, true);
-    m!("claude-fable-5.1", "Claude Fable 5.1", "anthropic", "frontier", 10.0, 50.0, false, &["text","image","file"], &["text"], true, true);
-    m!("gpt-6-astra", "GPT-6 Astra", "openai", "frontier", 10.0, 50.0, false, &["text","image","file"], &["text"], true, true);
-    m!("muse-spark-1-3", "Muse Spark 1.3", "vercel-ai-gateway", "frontier", 1.25, 4.25, false, &["text","image","file"], &["text"], true, true);
-    m!("gpt-6-sol", "GPT-6 Sol", "openai", "frontier", 2.0, 10.0, false, &["text","image","file"], &["text"], true, true);
-    m!("grok-4.7", "Grok 4.7", "x-ai", "frontier", 2.0, 6.0, false, &["text","image","file"], &["text"], true, true);
-    m!("qwen3.8-max", "Qwen3.8 Max", "qwen", "frontier", 2.0, 6.0, false, &["text","image","video"], &["text"], true, true);
-    m!("glm-5.3", "GLM-5.3", "z-ai", "frontier", 1.4, 4.4, false, &["text"], &["text"], false, true);
-    m!("kimi-k3", "Kimi K3", "kimi", "frontier", 3.0, 15.0, false, &["text","image","video"], &["text"], true, true);
-    m!("gpt-5.6-terra", "GPT-5.6 Terra", "openai", "frontier", 2.0, 12.0, false, &["text","image","file"], &["text"], true, true);
-    m!("mimo-v2.6-flash", "MiMo V2.6 Flash", "xiaomi", "value", 0.14, 0.28, false, &["text","image","audio","video"], &["text"], true, true);
-    m!("mimo-v2.6-pro", "MiMo V2.6 Pro", "xiaomi", "value", 0.435, 0.87, false, &["text","image","audio","video"], &["text"], true, true);
-    m!("glm-5.3-flash", "GLM 5.3 Flash", "z-ai", "value", 0.15, 0.5, false, &["text","image","file"], &["text"], true, true);
-    m!("glm-5.3-flashx", "GLM 5.3 FlashX", "z-ai", "value", 0.15, 0.5, false, &["text","image","file"], &["text"], true, true);
-    m!("gemini-3.8-flash", "Gemini 3.8 Flash", "google", "value", 0.75, 3.75, false, &["text","image","audio","file"], &["text"], true, true);
-    m!("qwen3.8-flash", "Qwen3.8 Flash", "qwen", "value", 0.15, 0.47, false, &["text","image","video"], &["text"], true, true);
-    m!("deepseek-v4.1-flash", "DeepSeek V4.1 Flash", "deepseek", "value", 0.3, 1.2, false, &["text","image"], &["text"], true, true);
-    m!("gpt-6-luna", "GPT-6 Luna", "openai", "value", 0.1, 0.5, false, &["text","image","file"], &["text"], true, true);
-    m!("qwen3.8-27b", "Qwen3.8 27B", "qwen", "value", 0.35, 2.1, false, &["text","image","video"], &["text"], true, true);
+    m!("claude-opus-5.5", "Claude Opus 5.5", "anthropic", "frontier", 4.0, 20.0, false, &["text","image","file"], &["text"], true, true, 200000, 64000);
+    m!("claude-fable-5.1", "Claude Fable 5.1", "anthropic", "frontier", 10.0, 50.0, false, &["text","image","file"], &["text"], true, true, 200000, 64000);
+    m!("gpt-6-astra", "GPT-6 Astra", "openai", "frontier", 10.0, 50.0, false, &["text","image","file"], &["text"], true, true, 200000, 64000);
+    m!("muse-spark-1-3", "Muse Spark 1.3", "vercel-ai-gateway", "frontier", 1.25, 4.25, false, &["text","image","file"], &["text"], true, true, 200000, 32000);
+    m!("gpt-6-sol", "GPT-6 Sol", "openai", "frontier", 2.0, 10.0, false, &["text","image","file"], &["text"], true, true, 200000, 64000);
+    m!("grok-4.7", "Grok 4.7", "x-ai", "frontier", 2.0, 6.0, false, &["text","image","file"], &["text"], true, true, 200000, 32000);
+    m!("qwen3.8-max", "Qwen3.8 Max", "qwen", "frontier", 2.0, 6.0, false, &["text","image","video"], &["text"], true, true, 256000, 64000);
+    m!("glm-5.3", "GLM-5.3", "z-ai", "frontier", 1.4, 4.4, false, &["text"], &["text"], false, true, 200000, 32000);
+    m!("kimi-k3", "Kimi K3", "kimi", "frontier", 3.0, 15.0, false, &["text","image","video"], &["text"], true, true, 256000, 32000);
+    m!("gpt-5.6-terra", "GPT-5.6 Terra", "openai", "frontier", 2.0, 12.0, false, &["text","image","file"], &["text"], true, true, 200000, 64000);
+    m!("mimo-v2.6-flash", "MiMo V2.6 Flash", "xiaomi", "value", 0.14, 0.28, false, &["text","image","audio","video"], &["text"], true, true, 200000, 32000);
+    m!("mimo-v2.6-pro", "MiMo V2.6 Pro", "xiaomi", "value", 0.435, 0.87, false, &["text","image","audio","video"], &["text"], true, true, 200000, 32000);
+    m!("glm-5.3-flash", "GLM 5.3 Flash", "z-ai", "value", 0.15, 0.5, false, &["text","image","file"], &["text"], true, true, 200000, 32000);
+    m!("glm-5.3-flashx", "GLM 5.3 FlashX", "z-ai", "value", 0.15, 0.5, false, &["text","image","file"], &["text"], true, true, 200000, 32000);
+    m!("gemini-3.8-flash", "Gemini 3.8 Flash", "google", "value", 0.75, 3.75, false, &["text","image","audio","file"], &["text"], true, true, 1000000, 64000);
+    m!("qwen3.8-flash", "Qwen3.8 Flash", "qwen", "value", 0.15, 0.47, false, &["text","image","video"], &["text"], true, true, 256000, 64000);
+    m!("deepseek-v4.1-flash", "DeepSeek V4.1 Flash", "deepseek", "value", 0.3, 1.2, false, &["text","image"], &["text"], true, true, 1000000, 384000);
+    m!("gpt-6-luna", "GPT-6 Luna", "openai", "value", 0.1, 0.5, false, &["text","image","file"], &["text"], true, true, 200000, 64000);
+    m!("qwen3.8-27b", "Qwen3.8 27B", "qwen", "value", 0.35, 2.1, false, &["text","image","video"], &["text"], true, true, 256000, 64000);
     // 免费
-    m!("mimo-v2.6-flash", "MiMo V2.6 Flash", "xiaomi", "value", 0.0, 0.0, true, &["text","image","audio","video"], &["text"], true, true);
-    m!("qwen3.8-flash", "Qwen3.8 Flash", "qwen", "value", 0.0, 0.0, true, &["text","image","video"], &["text"], true, true);
-    m!("deepseek-v4.1-flash", "DeepSeek V4.1 Flash", "deepseek", "value", 0.0, 0.0, true, &["text","image"], &["text"], true, true);
+    m!("mimo-v2.6-flash", "MiMo V2.6 Flash", "xiaomi", "value", 0.0, 0.0, true, &["text","image","audio","video"], &["text"], true, true, 200000, 32000);
+    m!("qwen3.8-flash", "Qwen3.8 Flash", "qwen", "value", 0.0, 0.0, true, &["text","image","video"], &["text"], true, true, 256000, 64000);
+    m!("deepseek-v4.1-flash", "DeepSeek V4.1 Flash", "deepseek", "value", 0.0, 0.0, true, &["text","image"], &["text"], true, true, 1000000, 384000);
     // 兜底 Rudder（站点默认免费 chat）
     v.push(ModelMeta {
         id: "th-rudder:free".into(),
@@ -149,6 +155,8 @@ pub fn catalog() -> Vec<ModelMeta> {
         tools: true,
         reasoning: true,
         free_until: None,
+        context_window: 200_000,
+        max_output: 64_000,
     });
     v
 }
@@ -267,13 +275,15 @@ impl ModelRegistry {
     }
 }
 
-/// OpenAI /v1/models 形状
+/// OpenAI /v1/models 形状（含上下文窗口，供客户端展示）
 #[derive(Serialize, Deserialize)]
 pub struct OpenAIModelObject {
     pub id: String,
     pub object: String,
     pub created: i64,
     pub owned_by: String,
+    pub context_window: i64,
+    pub max_output_tokens: i64,
 }
 
 /// Anthropic /v1/models 形状
@@ -294,6 +304,8 @@ pub fn openai_models(list: &[ModelMeta]) -> Vec<OpenAIModelObject> {
             object: "model".into(),
             created: 0,
             owned_by: m.family.clone(),
+            context_window: m.context_window,
+            max_output_tokens: m.max_output,
         })
         .collect()
 }
@@ -306,7 +318,7 @@ pub fn anthropic_models(list: &[ModelMeta]) -> Vec<AnthropicModelObject> {
             created: 0,
             input_modalities: m.input_modalities.clone(),
             output_modalities: m.output_modalities.clone(),
-            context_window: 200_000,
+            context_window: m.context_window,
         })
         .collect()
 }

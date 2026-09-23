@@ -12,6 +12,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// 会话上限（对齐上游 200 会话限制；超过时先清最旧再建，避免触发上游风控）
+pub const MAX_SESSIONS: usize = 200;
+/// 会话空闲清理阈值（小时）
+pub const SESSION_IDLE_HOURS: i64 = 24;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionBinding {
     /// 上游 session id
@@ -70,6 +75,14 @@ impl SessionMap {
             }
             let _ = self.remove(key).await;
         }
+        // 超上限：淘汰最旧空闲会话（防上游 200 会话风控）
+        if self.len().await >= MAX_SESSIONS {
+            let stale_keys = self.stale(0).await; // idle>0h 即最旧
+            if let Some((old_key, _)) = stale_keys.first() {
+                tracing::info!("会话池达上限 {}，淘汰最旧会话 {old_key}", MAX_SESSIONS);
+                let _ = self.remove(old_key).await;
+            }
+        }
         let upstream_id = client.create_session(model, true, cookie).await?;
         let binding = SessionBinding {
             upstream_id,
@@ -90,17 +103,25 @@ impl SessionMap {
         }
     }
 
-    /// 超过 max_idle 小时未活动的会话建议清理（返回 key 列表）
+    /// 超过 max_idle 小时未活动的会话建议清理（返回 key 列表，按最旧在前）
+    /// max_idle_hours=0 时返回按 last_active 升序（最旧在前）
     pub async fn stale(&self, max_idle_hours: i64) -> Vec<(String, SessionBinding)> {
         let now = chrono::Utc::now();
-        self.inner.read().await.iter()
+        let mut items: Vec<(String, SessionBinding)> = self.inner.read().await.iter()
             .filter(|(_, b)| {
+                if max_idle_hours == 0 { return true; }
                 chrono::DateTime::parse_from_rfc3339(&b.last_active)
                     .map(|t| (now - t.with_timezone(&chrono::Utc)).num_hours() > max_idle_hours)
                     .unwrap_or(false)
             })
             .map(|(k, b)| (k.clone(), b.clone()))
-            .collect()
+            .collect();
+        items.sort_by(|a, b| {
+            let ta = chrono::DateTime::parse_from_rfc3339(&a.1.last_active).map(|t| t.timestamp()).unwrap_or(0);
+            let tb = chrono::DateTime::parse_from_rfc3339(&b.1.last_active).map(|t| t.timestamp()).unwrap_or(0);
+            ta.cmp(&tb)
+        });
+        items
     }
 }
 

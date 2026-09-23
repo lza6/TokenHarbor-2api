@@ -97,6 +97,39 @@ async fn main() -> anyhow::Result<()> {
     // 会话映射
     let sessions = Arc::new(SessionMap::new());
 
+    // 分层并发信号量（免费/付费/多会话分桶限流）
+    let semaphore = Arc::new(tokenharbor2api::semaphore::TieredSemaphore::new(
+        cfg.concurrency_free_slots,
+        cfg.concurrency_free_multi,
+        cfg.concurrency_sub_slots,
+        cfg.concurrency_sub_multi,
+    ));
+
+    // 会话自动清理任务：每 10 分钟清理空闲 >24h 的会话（防上游 200 上限风控）
+    {
+        let sessions2 = sessions.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                let stale = sessions2.stale(tokenharbor2api::session::SESSION_IDLE_HOURS).await;
+                for (key, binding) in &stale {
+                    tracing::info!(
+                        "清理空闲会话 {} (idle={}h, msgs={})",
+                        &key[..key.len().min(16)],
+                        tokenharbor2api::session::SESSION_IDLE_HOURS,
+                        binding.message_count
+                    );
+                    let _ = sessions2.remove(key).await;
+                }
+                if !stale.is_empty() {
+                    tracing::info!("会话清理完成: {} 个空闲会话已移除", stale.len());
+                }
+            }
+        });
+    }
+
     // 运行时 API Key
     let api_keys = Arc::new(std::sync::RwLock::new(cfg.api_keys.clone()));
     if cfg.api_keys.is_empty() {
@@ -135,6 +168,7 @@ async fn main() -> anyhow::Result<()> {
         registry,
         sessions,
         api_keys,
+        semaphore,
     };
 
     let app = build_router(state);

@@ -25,6 +25,7 @@ pub struct AppState {
     pub registry: Arc<ModelRegistry>,
     pub sessions: Arc<SessionMap>,
     pub api_keys: Arc<std::sync::RwLock<Vec<String>>>,
+    pub semaphore: Arc<crate::semaphore::TieredSemaphore>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -217,6 +218,10 @@ async fn handle_chat_completions(
         return api_err_response(ApiError::internal("客户端未初始化"));
     };
 
+    // 并发限流：免费模型单会话桶（默认 1），防上游风控
+    let is_free = model.contains(":free");
+    let _permit = state.semaphore.acquire(is_free, false).await;
+
     // 提取最终消息内容（上游 session 保留历史，只发最后一条 user）
     let last_user = body.messages.iter().rev().find(|m| m.role == "user");
     let content = last_user.map(|m| message_text(&m.content)).unwrap_or_default();
@@ -362,6 +367,10 @@ async fn handle_claude_messages(
     let Some(client) = state.clients.first().cloned() else {
         return api_err_response_anthropic(ApiError::internal("客户端未初始化"));
     };
+
+    // 并发限流（免费单会话桶）
+    let is_free = model.contains(":free");
+    let _permit = state.semaphore.acquire(is_free, false).await;
 
     // Anthropic content 可能是字符串或数组；取最后一条 user
     let last_user = body.messages.iter().rev().find(|m| m.role == "user");
