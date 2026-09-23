@@ -169,10 +169,10 @@ pub fn rebuild_cookie(old_cookie: &str, session: &RefreshResponse) -> String {
     let mut parts: Vec<String> = Vec::new();
     for part in old_cookie.split(';') {
         let part = part.trim();
-        if part.starts_with("sb-auth-auth-token.0=") {
+        // 续期后移除 tok0 + tok1（上游实测：带 tok1 的续期 cookie 401，仅 tok0 + th_* 201）
+        if part.starts_with("sb-auth-auth-token.0=") || part.starts_with("sb-auth-auth-token.1=") {
             continue;
         }
-        // 保留原始 tok1 不动（服务端鉴权只用 tok0 + th_*；tok1 仅客户端 refresh 侧用）
         if !part.is_empty() {
             parts.push(part.to_string());
         }
