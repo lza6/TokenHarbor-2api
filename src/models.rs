@@ -164,7 +164,7 @@ fn free_until(surface: &str) -> Option<&'static str> {
 /// surface → 上游完整 id（付费/免费）
 pub fn upstream_id(surface: &str, is_free: bool) -> String {
     let surface = surface.trim();
-    let surface = if surface.ends_with(":free") { &surface[..surface.len()-5] } else { surface };
+    let surface = surface.strip_suffix(":free").unwrap_or(surface);
     for (s, p) in SURFACE_PROVIDER {
         if *s == surface {
             let p = if *p == "th-rudder" { "th-rudder".to_string() } else { p.to_string() };

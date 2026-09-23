@@ -9,6 +9,7 @@
 //! - POST /api/direct-chat/transcribe         语音转文字（FormData）
 //! - GET  /api/me/free-tier                   免费额度
 //! - GET  /api/me/chat-quotas                 每日限额
+//!
 //! 认证：Cookie（sb-auth-auth-token.0/.1 + th_sid + th_attr*），origin/referer 必须一致。
 
 use anyhow::{anyhow, Context, Result};

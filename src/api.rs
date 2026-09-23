@@ -247,7 +247,7 @@ async fn handle_chat_completions(
         rewind_to: None,
     };
 
-    match state.clients.first().cloned().map(|c| c) {
+    match state.clients.first().cloned() {
         Some(client) => match client.stream(&stream_req, Some(&cred.cookie)).await {
             Ok(up) => {
                 state.pool.record_success(&cred.id).await;
@@ -255,7 +255,7 @@ async fn handle_chat_completions(
                 if body.stream {
                     let s = crate::protocol::openai_sse::openai_events(up, &model, created, &binding.upstream_id);
                     let body = axum::body::Body::from_stream(s);
-                    return SseResponse { body }.into_response();
+                    SseResponse { body }.into_response()
                 } else {
                     // 非流式：读完整文本（简化：收集 chunk 事件）
                     let text = collect_nonstream_text(up).await;
@@ -415,7 +415,7 @@ async fn handle_claude_messages(
                 "stop_sequence": null,
                 "usage": { "input_tokens": 0, "output_tokens": 0 }
             });
-            return Json(resp).into_response();
+            Json(resp).into_response()
         }
         Err(e) => {
             state.pool.record_failure(&cred.id, 502).await;

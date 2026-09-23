@@ -51,6 +51,10 @@ impl SessionMap {
         self.inner.read().await.len()
     }
 
+    pub async fn is_empty(&self) -> bool {
+        self.inner.read().await.is_empty()
+    }
+
     /// 绑定（或复用）一个下游 key → 上游 session
     pub async fn ensure(
         &self,

@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
         clients.push(c);
     }
     // 其余 config 凭证
-    for t in cfg.auth_tokens.iter().skip(if cfg.auth_tokens.first().is_some() { 1 } else { 0 }) {
+    for t in cfg.auth_tokens.iter().skip(if !cfg.auth_tokens.is_empty() { 1 } else { 0 }) {
         if t.is_empty() { continue; }
         match UpstreamClient::new(
             cfg.upstream_base_url.clone(),
