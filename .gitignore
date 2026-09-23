@@ -1,0 +1,14 @@
+/target
+/graft
+/data
+*.sqlite
+*.sqlite3
+
+# 敏感输入材料（含真实 Cookie/JWT，不进入仓库）
+源代码、网络数据包/
+
+# 本地产物
+*.log
+.idea/
+.vscode/
+*.iml

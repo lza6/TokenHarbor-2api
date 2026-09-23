@@ -1,0 +1,29 @@
+{
+  "listen_addr": "127.0.0.1:47830",
+  "upstream_base_url": "https://tokenharbor.ai",
+  "auth_tokens": [
+    "sb-auth-auth-token.0=<完整 Cookie>; sb-auth-auth-token.1=<完整 Cookie>; th_sid=<会话id>; th_attr=<属性>"
+  ],
+  "api_keys": [],
+  "http_proxy": "",
+  "rotation_interval_sec": 21600,
+  "request_timeout_sec": 900,
+  "session_keepalive_sec": 45,
+  "default_model": "th-rudder:free",
+  "fallback_models": [
+    "alibaba/qwen3.8-flash:free",
+    "vercel-ai-gateway/deepseek/deepseek-v4.1-flash:free",
+    "xiaomi/mimo-v2.6-flash:free"
+  ],
+  "token_saver": false,
+  "sqlite_path": "data/tokenharbor2api.sqlite",
+  "tokens_path": "data/tokens.json",
+  "telemetry_path": "data/telemetry.sqlite",
+  "web_dir": "",
+  "skip_upstream_check": true,
+  "redact_logs": true,
+  "concurrency_free_slots": 1,
+  "concurrency_free_multi": 3,
+  "concurrency_sub_slots": 3,
+  "concurrency_sub_multi": 8
+}
