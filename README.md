@@ -39,9 +39,9 @@ curl -X POST http://127.0.0.1:47830/api/tokens/login \
 2. F12 → Network → 任意请求 → 复制完整 `cookie:` 整行（含 `sb-auth-auth-token.0` / `sb-auth-auth-token.1` / `th_sid`）
 3. 调 `/api/tokens/import` 粘贴导入
 
-**方式 C：启动自动续期**
+**方式 C：启动自动续期（已验证闭环）**
 
-网关启动时 + 每 50 分钟自动用 refresh_token 换新 access_token（`POST /api/tokens/refresh-all` 可手动触发）。注意：TokenHarbor 服务端对 refresh 后的会话有严格校验，若续期后 API 返回 401，请重新登录导入新 Cookie。
+网关启动时 + 每 50 分钟自动用 refresh_token 换新 access_token（`POST /api/tokens/refresh-all` 可手动触发）。续期后仅保留 `token.0`（移除 `token.1`，上游实测带 token.1 的续期 cookie 会 401），**真实 E2E 已验证续期后对话正常**，无需重复登录。
 
 ### 第 3 步：接入客户端
 
