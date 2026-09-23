@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.2.0 (2026-09-24)
+
+### 新增
+
+- CI/CD：GitHub Actions（build-release.yml：Windows 构建 + 测试 + clippy + Release 门禁；docker.yml：GHCR 镜像）
+- Docker 部署：docker/Dockerfile（多阶段构建 + HEALTHCHECK）+ .dockerignore
+- 自动续期闭环验证：续期后移除 tok0+tok1 只保留 th_*+新 tok0，真实 E2E 续期后对话正常
+- 上传链路验证：/api/direct-chat/upload 预签名真实 E2E 通过
+- scripts/e2e_verify.ps1 一键真实 E2E 验证脚本
+
+### 修复（clippy 门禁）
+
+- needless-return / map-identity / manual-strip / doc-lazy-continuation / len-without-is-empty
+
+## v0.1.0 (2026-09-24)
+
+首个可运行版本。上游 TokenHarbor 协议逆向自抓包数据包 + 站点 JS chunk + /models RSC 实时快照。
+
 ## v0.1.0 (2026-09-24)
 
 首个可运行版本。上游 TokenHarbor 协议逆向自抓包数据包 + 站点 JS chunk + /models RSC 实时快照。
