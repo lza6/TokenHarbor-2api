@@ -5,9 +5,16 @@ use tokenharbor2api::errors::ApiError;
 use tokenharbor2api::session::SessionMap;
 use tokenharbor2api::web_pool::WebCookiePool;
 
+fn tmp_config() -> Config {
+    let mut cfg = Config::default();
+    let dir = std::env::temp_dir().join(format!("th2api_test_{}", uuid::Uuid::new_v4().simple()));
+    cfg.tokens_path = dir.join("tokens.json").to_string_lossy().to_string();
+    cfg
+}
+
 #[tokio::test]
 async fn pool_add_dedupe_and_pick() {
-    let cfg = Config::default();
+    let cfg = tmp_config();
     let pool = WebCookiePool::new();
     pool.load(&cfg).await;
     let c1 = pool.add_raw("sb-auth-auth-token.0=abc; th_sid=1".to_string()).await;
@@ -28,7 +35,7 @@ async fn pool_add_dedupe_and_pick() {
 
 #[tokio::test]
 async fn pool_failure_cooldown() {
-    let cfg = Config::default();
+    let cfg = tmp_config();
     let pool = WebCookiePool::new();
     pool.load(&cfg).await;
     let c1 = pool.add_raw("sb-auth-auth-token.0=abc; th_sid=1".to_string()).await;
@@ -45,7 +52,7 @@ async fn pool_failure_cooldown() {
 
 #[tokio::test]
 async fn pool_success_recovers() {
-    let cfg = Config::default();
+    let cfg = tmp_config();
     let pool = WebCookiePool::new();
     pool.load(&cfg).await;
     let c1 = pool.add_raw("sb-auth-auth-token.0=abc; th_sid=1".to_string()).await;
