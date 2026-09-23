@@ -37,6 +37,7 @@ pub fn anthropic_events(
         finished: false,
         message_id: format!("msg_{}", uuid::Uuid::new_v4().simple()),
         saw_content: false,
+        pending_event: String::new(),
     }
 }
 
@@ -48,6 +49,7 @@ struct AnthropicTransform {
     finished: bool,
     message_id: String,
     saw_content: bool,
+    pending_event: String,
 }
 
 impl AnthropicTransform {
@@ -100,8 +102,12 @@ impl Stream for AnthropicTransform {
                 Poll::Ready(Ok(_)) => {
                     let line = line.trim_end_matches('\n').trim_end_matches('\r');
                     if line.is_empty() { continue; }
+                    if let Some(ev_name) = line.strip_prefix("event: ") {
+                        self.pending_event = ev_name.trim().to_string();
+                        continue;
+                    }
                     if let Some(data) = line.strip_prefix("data: ") {
-                        if let Some(evt) = parse(data) {
+                        if let Some(evt) = parse(data, &self.pending_event) {
                             match evt.event.as_str() {
                                 "thinking" => {
                                     let delta = evt.json.get("delta").and_then(|v| v.as_str()).unwrap_or("");
@@ -162,12 +168,14 @@ impl Stream for AnthropicTransform {
     }
 }
 
-fn parse(data: &str) -> Option<Event> {
+fn parse(data: &str, event_name: &str) -> Option<Event> {
     let json: serde_json::Value = serde_json::from_str(data).ok()?;
-    Some(Event {
-        event: json.get("event").and_then(|v| v.as_str()).unwrap_or("message").to_string(),
-        json,
-    })
+    let event = if event_name.is_empty() {
+        json.get("event").and_then(|v| v.as_str()).unwrap_or("message").to_string()
+    } else {
+        event_name.to_string()
+    };
+    Some(Event { event, json })
 }
 
 struct Event {

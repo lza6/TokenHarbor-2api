@@ -103,6 +103,31 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("未配置 api_keys：仅本机可访问（面板可一键生成）");
     }
 
+    // 启动时立即续期一次（凭证过期也能自动复活）
+    let proxy = if cfg.http_proxy.is_empty() { None } else { Some(cfg.http_proxy.clone()) };
+    {
+        let pool2 = pool.clone();
+        let n = pool2.refresh_creds(proxy.as_deref()).await;
+        tracing::info!("启动续期完成: {n} 条凭证已刷新");
+    }
+
+    // 后台定时续期任务（每 50 分钟检查 + 刷新，覆盖 access_token 1h 有效期）
+    {
+        let pool2 = pool.clone();
+        let proxy2 = proxy.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3000));
+            interval.tick().await; // 首次立即后跳过
+            loop {
+                interval.tick().await;
+                let n = pool2.refresh_creds(proxy2.as_deref()).await;
+                if n > 0 {
+                    tracing::info!("定时续期: {n} 条凭证已刷新");
+                }
+            }
+        });
+    }
+
     let state = AppState {
         cfg: Arc::new(cfg),
         clients,

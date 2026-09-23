@@ -37,6 +37,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/messages", post(handle_claude_messages))
         .route("/api/tokens", get(handle_tokens_list))
         .route("/api/tokens/import", post(handle_tokens_import))
+        .route("/api/tokens/login", post(handle_tokens_login))
+        .route("/api/tokens/refresh-all", post(handle_tokens_refresh_all))
         .route("/api/tokens/delete", post(handle_tokens_delete))
         .route("/api/tokens/check", post(handle_tokens_check))
         .route("/api/guide", get(handle_guide))
@@ -223,7 +225,8 @@ async fn handle_chat_completions(
     }
 
     // 会话绑定：下游线程 id 或 user 字段
-    let thread_key = body.user.clone().unwrap_or_else(|| format!("anon-{}", created));
+    // 有 user 用 user；没有用固定 default-thread（本地单用户网关保持上下文连续）
+    let thread_key = body.user.clone().unwrap_or_else(|| "default-thread".to_string());
     let binding = match state.sessions.ensure(&thread_key, &client, &model, Some(&cred.cookie)).await {
         Ok(b) => b,
         Err(e) => {
@@ -274,12 +277,13 @@ async fn handle_chat_completions(
 
 fn text_body(s: &str) -> String { s.to_string() }
 
-/// 非流式：收集上游所有 chunk，拼成完整文本
+/// 非流式：收集上游所有 chunk，拼成完整文本（追踪 event: 行）
 async fn collect_nonstream_text(up: reqwest::Response) -> String {
     let reader = crate::protocol::stream::reader_with_bytes(up.bytes_stream());
     let mut reader = tokio::io::BufReader::new(reader);
     let mut line = String::new();
     let mut out = String::new();
+    let mut pending_event = String::new();
     loop {
         line.clear();
         use tokio::io::AsyncBufReadExt;
@@ -287,9 +291,18 @@ async fn collect_nonstream_text(up: reqwest::Response) -> String {
             break;
         }
         let t = line.trim();
+        if let Some(ev) = t.strip_prefix("event: ") {
+            pending_event = ev.trim().to_string();
+            continue;
+        }
         if let Some(data) = t.strip_prefix("data: ") {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                match v.get("event").and_then(|e| e.as_str()).unwrap_or("") {
+                let evt = if pending_event.is_empty() {
+                    v.get("event").and_then(|e| e.as_str()).unwrap_or("")
+                } else {
+                    pending_event.as_str()
+                };
+                match evt {
                     "chunk" => {
                         if let Some(d) = v.get("delta").and_then(|d| d.as_str()) {
                             out.push_str(d);
@@ -341,7 +354,6 @@ async fn handle_claude_messages(
     if let Err(e) = check_api_key(&state.cfg, &state.api_keys, &headers) {
         return api_err_response_anthropic(e);
     }
-    let created = chrono::Utc::now().timestamp();
     let model = state.registry.resolve(&body.model).await;
 
     let Some(cred) = state.pool.pick(None).await else {
@@ -361,7 +373,7 @@ async fn handle_claude_messages(
     let thread_key = body.metadata.as_ref()
         .and_then(|m| m.get("thread_id").and_then(|v| v.as_str()))
         .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("claude-{}", created));
+        .unwrap_or_else(|| "default-thread".to_string());
     let binding = match state.sessions.ensure(&thread_key, &client, &model, Some(&cred.cookie)).await {
         Ok(b) => b,
         Err(e) => {
@@ -517,6 +529,32 @@ fn normalize_cookie(raw: &str) -> String {
         .filter(|p| p.contains('='))
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TokenLoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+async fn handle_tokens_login(State(state): State<AppState>, Json(body): Json<TokenLoginRequest>) -> Response {
+    if body.email.trim().is_empty() || body.password.is_empty() {
+        return api_err_response(ApiError::bad_request("email/password 不能为空"));
+    }
+    let proxy = if state.cfg.http_proxy.is_empty() { None } else { Some(state.cfg.http_proxy.clone()) };
+    match state.pool.login_email(&body.email, &body.password, proxy.as_deref()).await {
+        Ok(cred) => {
+            state.pool.record_success(&cred.id).await;
+            Json(json!({ "ok": true, "id": cred.id, "label": cred.label })).into_response()
+        }
+        Err(e) => api_err_response(ApiError::upstream(format!("登录失败: {e}"))),
+    }
+}
+
+async fn handle_tokens_refresh_all(State(state): State<AppState>) -> Response {
+    let proxy = if state.cfg.http_proxy.is_empty() { None } else { Some(state.cfg.http_proxy.clone()) };
+    let n = state.pool.refresh_creds(proxy.as_deref()).await;
+    Json(json!({ "ok": true, "refreshed": n })).into_response()
 }
 
 async fn handle_tokens_delete(State(state): State<AppState>, Json(body): Json<serde_json::Value>) -> Response {

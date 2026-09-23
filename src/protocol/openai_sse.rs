@@ -37,6 +37,7 @@ pub fn openai_events(
         finished: false,
         done_sent: false,
         saw_content: false,
+        pending_event: String::new(),
     }
 }
 
@@ -47,6 +48,7 @@ struct OpenAiTransform {
     finished: bool,
     done_sent: bool,
     saw_content: bool,
+    pending_event: String,
 }
 
 impl Stream for OpenAiTransform {
@@ -79,8 +81,12 @@ impl Stream for OpenAiTransform {
                 Poll::Ready(Ok(_)) => {
                     let line = line.trim_end_matches('\n').trim_end_matches('\r');
                     if line.is_empty() { continue; }
+                    if let Some(ev_name) = line.strip_prefix("event: ") {
+                        self.pending_event = ev_name.trim().to_string();
+                        continue;
+                    }
                     if let Some(data) = line.strip_prefix("data: ") {
-                        match parse_sse_data(data) {
+                        match parse_sse_data(data, &self.pending_event) {
                             Some(evt) => {
                                 match evt.event.as_str() {
                                     "thinking" => {
@@ -192,12 +198,14 @@ impl Stream for OpenAiTransform {
     }
 }
 
-fn parse_sse_data(data: &str) -> Option<Event> {
+fn parse_sse_data(data: &str, event_name: &str) -> Option<Event> {
     let json: serde_json::Value = serde_json::from_str(data).ok()?;
-    Some(Event {
-        event: json.get("event").and_then(|v| v.as_str()).unwrap_or("message").to_string(),
-        json,
-    })
+    let event = if event_name.is_empty() {
+        json.get("event").and_then(|v| v.as_str()).unwrap_or("message").to_string()
+    } else {
+        event_name.to_string()
+    };
+    Some(Event { event, json })
 }
 
 struct Event {

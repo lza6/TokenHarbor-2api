@@ -64,6 +64,7 @@ pub struct SessionDetail {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamRequest {
+    #[serde(rename = "sessionId")]
     pub session_id: String,
     pub content: String,
     pub model: String,
@@ -115,7 +116,8 @@ impl UpstreamClient {
             .connect_timeout(Duration::from_secs(15))
             .read_timeout(Duration::from_secs(300))
             .pool_idle_timeout(Duration::from_secs(90))
-            .cookie_store(true)
+            // 手工管理 Cookie header（凭证池按账号轮换），关闭 reqwest jar 以免干扰
+            .cookie_store(false)
             .user_agent(DESKTOP_UA)
             .default_headers(default_headers(&base_url));
         if let Some(p) = &proxy {

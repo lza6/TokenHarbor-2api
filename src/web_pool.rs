@@ -162,6 +162,47 @@ impl WebCookiePool {
         self.states.read().await.clone()
     }
 
+    /// 刷新凭证（Supabase refresh_token 换新，自动续期核心）
+    pub async fn refresh_creds(&self, proxy: Option<&str>) -> usize {
+        let creds = self.list().await;
+        let mut refreshed = 0usize;
+        for cred in &creds {
+            let Some(rt) = crate::refresh::refresh_token_from_cookie(&cred.cookie) else { continue };
+            match crate::refresh::refresh_session(&rt, proxy).await {
+                Ok(sess) => {
+                    let new_cookie = crate::refresh::rebuild_cookie(&cred.cookie, &sess);
+                    let mut store = self.creds.write().await;
+                    if let Some(c) = store.iter_mut().find(|c| c.id == cred.id) {
+                        c.cookie = new_cookie;
+                    }
+                    drop(store);
+                    self.record_success(&cred.id).await;
+                    self.save().await;
+                    refreshed += 1;
+                    tracing::info!("凭证 {} 已自动续期", &cred.id[..8]);
+                }
+                Err(e) => {
+                    tracing::warn!("凭证 {} 续期失败: {e}", &cred.id[..8]);
+                    self.record_failure(&cred.id, 401).await;
+                }
+            }
+        }
+        refreshed
+    }
+
+    /// 邮箱密码登录并入库
+    pub async fn login_email(&self, email: &str, password: &str, proxy: Option<&str>) -> anyhow::Result<Credential> {
+        let sess = crate::refresh::email_login(email, password, proxy).await?;
+        let cookie = format!(
+            "sb-auth-auth-token.0={}; sb-auth-auth-token.1={}; th_sid={}",
+            sess_token(&sess, 0),
+            sess_token(&sess, 1),
+            uuid::Uuid::new_v4().simple()
+        );
+        let cred = self.add_raw(cookie).await;
+        Ok(cred)
+    }
+
     async fn save(&self) {
         let path = self.path.read().await.clone();
         if let Some(p) = path {
@@ -171,3 +212,27 @@ impl WebCookiePool {
     }
 }
 
+
+/// 把 RefreshResponse 组装成 Supabase base64-<json> cookie 值
+fn sess_token(sess: &crate::refresh::RefreshResponse, which: u8) -> String {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    let obj = if which == 0 {
+        serde_json::json!({
+            "access_token": sess.access_token,
+            "token_type": sess.token_type.clone().unwrap_or_else(|| "bearer".into()),
+            "expires_in": sess.expires_in.unwrap_or(3600),
+            "expires_at": sess.expires_at.unwrap_or_else(|| chrono::Utc::now().timestamp() + 3600),
+            "refresh_token": sess.refresh_token,
+            "user": sess.user.clone().unwrap_or(serde_json::json!({})),
+        })
+    } else {
+        serde_json::json!({
+            "access_token": sess.access_token,
+            "refresh_token": sess.refresh_token,
+            "expires_in": sess.expires_in.unwrap_or(3600),
+            "expires_at": sess.expires_at.unwrap_or_else(|| chrono::Utc::now().timestamp() + 3600),
+            "token_type": sess.token_type.clone().unwrap_or_else(|| "bearer".into()),
+        })
+    };
+    format!("base64-{}", URL_SAFE_NO_PAD.encode(serde_json::to_vec(&obj).unwrap_or_default()))
+}
