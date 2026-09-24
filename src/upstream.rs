@@ -211,6 +211,12 @@ impl UpstreamClient {
         Ok(resp)
     }
 
+    /// 判断错误是否是上游 429 限流（会话速率限制，换新 session 可绕开）
+    pub fn is_rate_limited(err: &anyhow::Error) -> bool {
+        let msg = format!("{err:#}");
+        msg.contains("429") || msg.contains("rate_limited") || msg.contains("too many")
+    }
+
     /// 上传预签名（大文件走 Supabase；小图直接 base64 不发这里）
     pub async fn prepare_upload(&self, kind: &str, name: &str, mime: &str, bytes: u64, cookie: Option<&str>) -> Result<UploadResponse> {
         let url = format!("{}/api/direct-chat/upload", self.base_url);

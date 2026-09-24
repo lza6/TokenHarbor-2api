@@ -229,54 +229,75 @@ async fn handle_chat_completions(
         return api_err_response(ApiError::bad_request("消息内容为空"));
     }
 
-    // 会话绑定：下游线程 id 或 user 字段
-    // 有 user 用 user；没有用固定 default-thread（本地单用户网关保持上下文连续）
+    // 会话绑定：下游线程 id 或 user 字段（有 user 用 user；否则 default-thread 保持上下文）
     let thread_key = body.user.clone().unwrap_or_else(|| "default-thread".to_string());
-    let binding = match state.sessions.ensure(&thread_key, &client, &model, Some(&cred.cookie)).await {
+    let initial_binding = match state.sessions.ensure(&thread_key, &client, &model, Some(&cred.cookie)).await {
         Ok(b) => b,
         Err(e) => {
             state.pool.record_failure(&cred.id, 401).await;
             return api_err_response(ApiError::upstream(format!("创建上游会话失败: {e}")));
         }
     };
-
-    let atts = extract_attachments(&body.messages);
-    let stream_req = StreamRequest {
-        session_id: binding.upstream_id.clone(),
-        content,
-        model: model.clone(),
-        attachments: if atts.is_empty() { None } else { Some(atts) },
-        web_search: Some(body.web_search.clone().unwrap_or_else(|| "auto".into())),
-        tz: Some(UpstreamClient::timezone()),
-        use_kb: None,
-        rewind_to: None,
+    let mut binding = initial_binding;
+    let mut retried_429 = false;
+    let mut attempt = 0usize;
+    let resp_result: Result<reqwest::Response, anyhow::Error> = loop {
+        attempt += 1;
+        let atts = extract_attachments(&body.messages);
+        let stream_req = crate::upstream::StreamRequest {
+            session_id: binding.upstream_id.clone(),
+            content: content.clone(),
+            model: model.clone(),
+            attachments: if atts.is_empty() { None } else { Some(atts) },
+            web_search: Some(body.web_search.clone().unwrap_or_else(|| "auto".into())),
+            tz: Some(crate::upstream::UpstreamClient::timezone()),
+            use_kb: None,
+            rewind_to: None,
+        };
+        match client.stream(&stream_req, Some(&cred.cookie)).await {
+            Ok(up) => break Ok(up),
+            Err(e) if crate::upstream::UpstreamClient::is_rate_limited(&e) && !retried_429 => {
+                // 上游对单会话有连续消息速率限制（~10 条/窗口）：换新会话重试一次绕开
+                tracing::warn!("上游 429 会话限流，切换新会话重试 (attempt {attempt})");
+                retried_429 = true;
+                let _ = state.sessions.remove(&thread_key).await;
+                match state.sessions.ensure(&thread_key, &client, &model, Some(&cred.cookie)).await {
+                    Ok(new_binding) => binding = new_binding,
+                    Err(e2) => break Err(anyhow::anyhow!("429 换会话失败: {e2}")),
+                }
+                continue;
+            }
+            Err(e) => break Err(e),
+        }
     };
 
-    match state.clients.first().cloned() {
-        Some(client) => match client.stream(&stream_req, Some(&cred.cookie)).await {
-            Ok(up) => {
-                state.pool.record_success(&cred.id).await;
-                state.sessions.touch(&thread_key, 2).await;
-                if body.stream {
-                    let s = crate::protocol::openai_sse::openai_events(up, &model, created, &binding.upstream_id);
-                    let body = axum::body::Body::from_stream(s);
-                    SseResponse { body }.into_response()
-                } else {
-                    // 非流式：读完整文本（简化：收集 chunk 事件）
-                    let text = collect_nonstream_text(up).await;
-                    let body = crate::protocol::openai_sse::openai_nonstream(&text, &model, created, 0, 0);
-                    Response::builder()
-                        .header("content-type", "application/json")
-                        .body(axum::body::Body::from(text_body(&body)))
-                        .unwrap()
-                }
+    match resp_result {
+        Ok(up) => {
+            state.pool.record_success(&cred.id).await;
+            state.sessions.touch(&thread_key, 2).await;
+            if body.stream {
+                let s = crate::protocol::openai_sse::openai_events(up, &model, created, &binding.upstream_id);
+                let body = axum::body::Body::from_stream(s);
+                SseResponse { body }.into_response()
+            } else {
+                let text = collect_nonstream_text(up).await;
+                let body = crate::protocol::openai_sse::openai_nonstream(&text, &model, created, 0, 0);
+                Response::builder()
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(text_body(&body)))
+                    .unwrap()
             }
-            Err(e) => {
+        }
+        Err(e) => {
+            if crate::upstream::UpstreamClient::is_rate_limited(&e) {
+                // 429 透传为 429（客户端正确退避），并记录凭证冷却
+                state.pool.record_failure(&cred.id, 429).await;
+                api_err_response(ApiError::rate_limited(format!("上游限流，请稍后重试: {e}")))
+            } else {
                 state.pool.record_failure(&cred.id, 502).await;
                 api_err_response(ApiError::upstream(format!("上游对话失败: {e}")))
             }
-        },
-        None => api_err_response(ApiError::internal("客户端未初始化")),
+        }
     }
 }
 
@@ -383,27 +404,46 @@ async fn handle_claude_messages(
         .and_then(|m| m.get("thread_id").and_then(|v| v.as_str()))
         .map(|s| s.to_string())
         .unwrap_or_else(|| "default-thread".to_string());
-    let binding = match state.sessions.ensure(&thread_key, &client, &model, Some(&cred.cookie)).await {
+    let initial_binding = match state.sessions.ensure(&thread_key, &client, &model, Some(&cred.cookie)).await {
         Ok(b) => b,
         Err(e) => {
             state.pool.record_failure(&cred.id, 401).await;
             return api_err_response_anthropic(ApiError::upstream(format!("创建上游会话失败: {e}")));
         }
     };
-
-    let atts = anthropic_attachments(&body.messages);
-    let stream_req = StreamRequest {
-        session_id: binding.upstream_id.clone(),
-        content,
-        model: model.clone(),
-        attachments: if atts.is_empty() { None } else { Some(atts) },
-        web_search: Some("auto".into()),
-        tz: Some(UpstreamClient::timezone()),
-        use_kb: None,
-        rewind_to: None,
+    let mut binding = initial_binding;
+    let mut retried_429 = false;
+    let mut attempt = 0usize;
+    let resp_result: Result<reqwest::Response, anyhow::Error> = loop {
+        attempt += 1;
+        let atts = anthropic_attachments(&body.messages);
+        let stream_req = StreamRequest {
+            session_id: binding.upstream_id.clone(),
+            content: content.clone(),
+            model: model.clone(),
+            attachments: if atts.is_empty() { None } else { Some(atts) },
+            web_search: Some("auto".into()),
+            tz: Some(UpstreamClient::timezone()),
+            use_kb: None,
+            rewind_to: None,
+        };
+        match client.stream(&stream_req, Some(&cred.cookie)).await {
+            Ok(up) => break Ok(up),
+            Err(e) if crate::upstream::UpstreamClient::is_rate_limited(&e) && !retried_429 => {
+                tracing::warn!("上游 429 会话限流，切换新会话重试 (attempt {attempt})");
+                retried_429 = true;
+                let _ = state.sessions.remove(&thread_key).await;
+                match state.sessions.ensure(&thread_key, &client, &model, Some(&cred.cookie)).await {
+                    Ok(new_binding) => binding = new_binding,
+                    Err(e2) => break Err(anyhow::anyhow!("429 换会话失败: {e2}")),
+                }
+                continue;
+            }
+            Err(e) => break Err(e),
+        }
     };
 
-    match client.stream(&stream_req, Some(&cred.cookie)).await {
+    match resp_result {
         Ok(up) => {
             state.pool.record_success(&cred.id).await;
             state.sessions.touch(&thread_key, 2).await;
@@ -411,24 +451,30 @@ async fn handle_claude_messages(
                 let body = axum::body::Body::from_stream(
                     crate::protocol::anthropic_sse::anthropic_events(up, &model, &binding.upstream_id),
                 );
-                return AnthropicSseResponse { body }.into_response();
+                AnthropicSseResponse { body }.into_response()
+            } else {
+                let text = collect_nonstream_text(up).await;
+                let resp = json!({
+                    "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
+                    "type": "message",
+                    "role": "assistant",
+                    "model": model,
+                    "content": [{ "type": "text", "text": text }],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": null,
+                    "usage": { "input_tokens": 0, "output_tokens": 0 }
+                });
+                Json(resp).into_response()
             }
-            let text = collect_nonstream_text(up).await;
-            let resp = json!({
-                "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
-                "type": "message",
-                "role": "assistant",
-                "model": model,
-                "content": [{ "type": "text", "text": text }],
-                "stop_reason": "end_turn",
-                "stop_sequence": null,
-                "usage": { "input_tokens": 0, "output_tokens": 0 }
-            });
-            Json(resp).into_response()
         }
         Err(e) => {
-            state.pool.record_failure(&cred.id, 502).await;
-            api_err_response_anthropic(ApiError::upstream(format!("上游对话失败: {e}")))
+            if crate::upstream::UpstreamClient::is_rate_limited(&e) {
+                state.pool.record_failure(&cred.id, 429).await;
+                api_err_response_anthropic(ApiError::rate_limited(format!("上游限流，请稍后重试: {e}")))
+            } else {
+                state.pool.record_failure(&cred.id, 502).await;
+                api_err_response_anthropic(ApiError::upstream(format!("上游对话失败: {e}")))
+            }
         }
     }
 }

@@ -10,7 +10,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 /// 会话上限（对齐上游 200 会话限制；超过时先清最旧再建，避免触发上游风控）
 pub const MAX_SESSIONS: usize = 200;
@@ -33,6 +33,8 @@ pub struct SessionBinding {
 #[derive(Debug, Clone, Default)]
 pub struct SessionMap {
     inner: Arc<RwLock<HashMap<String, SessionBinding>>>,
+    /// per-key 会话创建互斥锁（防并发重复建会话触发上游风控）
+    locks: Arc<tokio::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 impl SessionMap {
@@ -61,6 +63,7 @@ impl SessionMap {
     }
 
     /// 绑定（或复用）一个下游 key → 上游 session
+    /// 同 key 并发时用 per-key 互斥锁：只允许一个 create_session，其余等待复用
     pub async fn ensure(
         &self,
         key: &str,
@@ -68,8 +71,20 @@ impl SessionMap {
         model: &str,
         cookie: Option<&str>,
     ) -> Result<SessionBinding> {
+        // 先快速路径：已有同模型 session 直接复用（不加锁）
         if let Some(b) = self.get(key).await {
-            // 模型变了就重建（上游 session.model 固定）
+            if b.model == model {
+                return Ok(b);
+            }
+        }
+        // per-key 锁：同 key 并发建会话串行化
+        let lock = {
+            let mut locks = self.locks.lock().await;
+            locks.entry(key.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
+        };
+        let _guard = lock.lock().await;
+        // 二次检查：等锁期间可能已被其它请求创建
+        if let Some(b) = self.get(key).await {
             if b.model == model {
                 return Ok(b);
             }

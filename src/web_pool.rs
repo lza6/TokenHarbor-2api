@@ -182,8 +182,9 @@ impl WebCookiePool {
                     tracing::info!("凭证 {} 已自动续期", &cred.id[..8]);
                 }
                 Err(e) => {
-                    tracing::warn!("凭证 {} 续期失败: {e}", &cred.id[..8]);
-                    self.record_failure(&cred.id, 401).await;
+                    // 续期失败不惩罚凭证：access_token 可能仍有效（浏览器会话），
+                    // 仅 refresh_token 链失效（refresh_token_already_used 等）
+                    tracing::warn!("凭证 {} 续期失败（不影响现有 access_token 使用）: {e}", &cred.id[..8]);
                 }
             }
         }
