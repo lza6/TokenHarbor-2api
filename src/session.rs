@@ -51,6 +51,14 @@ impl SessionMap {
     }
 
     pub async fn remove(&self, key: &str) -> Option<SessionBinding> {
+        let removed = self.remove_inner(key).await;
+        // 同时清理 per-key 锁，防止锁 map 无界增长（用户可注入任意 key -> DoS）
+        self.locks.lock().await.remove(key);
+        removed
+    }
+
+    /// 只删绑定，不碰锁（供 ensure 持锁时内部调用，避免死锁）
+    async fn remove_inner(&self, key: &str) -> Option<SessionBinding> {
         self.inner.write().await.remove(key)
     }
 
@@ -91,14 +99,14 @@ impl SessionMap {
             if b.model == model {
                 return Ok(b);
             }
-            let _ = self.remove(key).await;
+            let _ = self.remove_inner(key).await;
         }
         // 超上限：淘汰最旧空闲会话（防上游 200 会话风控）
         if self.len().await >= MAX_SESSIONS {
             let stale_keys = self.stale(0).await; // idle>0h 即最旧
             if let Some((old_key, _)) = stale_keys.first() {
                 tracing::info!("会话池达上限 {}，淘汰最旧会话 {old_key}", MAX_SESSIONS);
-                let _ = self.remove(old_key).await;
+                let _ = self.remove_inner(old_key).await;
             }
         }
         let upstream_id = client.create_session(model, true, cookie).await?;

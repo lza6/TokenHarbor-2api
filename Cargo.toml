@@ -1,6 +1,6 @@
 [package]
 name = "tokenharbor2api"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2021"
 description = "TokenHarbor 免费模型 OpenAI/Anthropic 兼容 API 网关（Rust 版）"
 authors = ["lza6"]

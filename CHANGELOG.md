@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.2.7 (2026-09-25)
+
+### 安全加固（终局审计发现 2 个 BLOCKER + 3 个 MAJOR 全部修复）
+
+- **BLOCKER 修复 — 5 个管理端点补认证**：`/api/tokens/import|login|refresh-all|delete|check` 原无任何认证（可匿名增删改查凭证池/中转邮箱密码/耗尽 refresh_token），统一加 `check_admin_auth`（API Key 或 UI session）
+- **BLOCKER 修复 — check_admin_auth 空配置放行**：原依赖 check_api_key 的"未配置即放行"语义，配置了 ui_password 但没配 api_keys 时管理端点全裸奔；重写为独立逻辑（有 ui_password 时必须 API key 或 session 真实匹配，不允许空放行）
+- **MAJOR 修复 — 429 冷却**：web_pool record_failure 原只对 401/403 冷却，429 只降分不冷却会连续选中触发上游风控；现 429 进短冷却（60s 起指数退避）
+- **MAJOR 修复 — session 锁 map 无界增长**：per-key 锁从不清理，用户注入任意 key 可 DoS；remove 时清理锁 + 拆分 remove_inner 避免 ensure 持锁内自删死锁
+- **MAJOR 修复 — /v1/models 认证组**：改回 check_api_key（/v1 纯 API key 规格）
+
+### 真实 E2E 安全回归（配 api_keys+ui_password）
+- 无认证 /api/tokens → 401 ✅
+- 无认证 /api/tokens/refresh-all → 401 ✅
+- 无认证 /api/tokens/import → 401 ✅
+- 无认证 /api/tokens/delete|check → 拒绝 ✅
+- 带 key /api/tokens → 200 ✅
+- UI 登录 → 200 / 错误密码 → 401 ✅
+- /v1/models 无 key → 401 / 带 key → 200 ✅
+- 22/22 测试通过，clippy -D warnings 全绿
+
 ## v0.2.6 (2026-09-25)
 
 ### 新增 — 导入强校验（必须含 refresh_token）+ 管理端点双认证 + 版本号动态化

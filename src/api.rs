@@ -92,12 +92,37 @@ fn check_api_key(
 /// 管理端点双认证：API Key 或 UI session cookie
 /// （UI 登录后无需再带 API Key 就能管理凭证/配置）
 fn check_admin_auth(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
-    // 1) API Key 校验（与 check_api_key 相同）
-    if check_api_key(&state.cfg, &state.api_keys, headers).is_ok() {
+    // 管理端点认证：API Key 或有效 UI session，二者必须真实匹配
+    // 注意：不使用 check_api_key 的"空配置即放行"语义——只要配置了 ui_password 或 api_keys，
+    // 就必须校验通过；完全无配置时仅允许本机（127.0.0.1）放行，公网必须配置至少一种。
+    let keys = state.api_keys.read().map(|g| g.clone()).unwrap_or_default();
+    let has_keys = !keys.is_empty() || !state.cfg.api_keys.is_empty();
+    let has_ui = !state.cfg.ui_password.is_empty();
+
+    if !has_keys && !has_ui {
+        // 完全未配置：仅本机可用（与 listen_addr 127.0.0.1 配套），公网部署必须配置
         return Ok(());
     }
-    // 2) UI session cookie 校验（仅当配置了 ui_password 时）
-    if !state.cfg.ui_password.is_empty() {
+
+    // 1) API Key 分支（真实匹配）
+    let auth = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let bearer = auth.strip_prefix("Bearer ").unwrap_or("").trim();
+    let x_key = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .trim();
+    let key_ok = keys.iter().any(|k| k == bearer || k == x_key)
+        || state.cfg.api_keys.iter().any(|k| k == bearer || k == x_key);
+    if key_ok {
+        return Ok(());
+    }
+
+    // 2) UI session cookie 分支（仅当配置了 ui_password）
+    if has_ui {
         let ok = headers
             .get("cookie")
             .and_then(|v| v.to_str().ok())
@@ -107,6 +132,7 @@ fn check_admin_auth(state: &AppState, headers: &HeaderMap) -> Result<(), ApiErro
             return Ok(());
         }
     }
+
     Err(ApiError::unauthorized(
         "需要 API Key 或登录 Web 面板（/ui）",
     ))
@@ -189,7 +215,7 @@ async fn handle_healthz(State(state): State<AppState>) -> Json<serde_json::Value
 // ---------- /v1/models ----------
 
 async fn handle_v1_models(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(e) = check_admin_auth(&state, &headers) {
+    if let Err(e) = check_api_key(&state.cfg, &state.api_keys, &headers) {
         return api_err_response(e);
     }
     let list = state.registry.all().await;
@@ -915,8 +941,12 @@ fn mask_cookie(cookie: &str) -> String {
 
 async fn handle_tokens_import(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<TokenImportRequest>,
 ) -> Response {
+    if let Err(e) = check_admin_auth(&state, &headers) {
+        return api_err_response(e);
+    }
     let raw = body.cookie.unwrap_or_default();
     if raw.trim().is_empty() {
         return api_err_response(ApiError::bad_request(
@@ -978,8 +1008,12 @@ pub struct TokenLoginRequest {
 
 async fn handle_tokens_login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<TokenLoginRequest>,
 ) -> Response {
+    if let Err(e) = check_admin_auth(&state, &headers) {
+        return api_err_response(e);
+    }
     if body.email.trim().is_empty() || body.password.is_empty() {
         return api_err_response(ApiError::bad_request("email/password 不能为空"));
     }
@@ -1001,7 +1035,10 @@ async fn handle_tokens_login(
     }
 }
 
-async fn handle_tokens_refresh_all(State(state): State<AppState>) -> Response {
+async fn handle_tokens_refresh_all(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(e) = check_admin_auth(&state, &headers) {
+        return api_err_response(e);
+    }
     let proxy = if state.cfg.http_proxy.is_empty() {
         None
     } else {
@@ -1013,8 +1050,12 @@ async fn handle_tokens_refresh_all(State(state): State<AppState>) -> Response {
 
 async fn handle_tokens_delete(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
+    if let Err(e) = check_admin_auth(&state, &headers) {
+        return api_err_response(e);
+    }
     let id = body
         .get("id")
         .and_then(|v| v.as_str())
@@ -1029,8 +1070,12 @@ async fn handle_tokens_delete(
 
 async fn handle_tokens_check(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
+    if let Err(e) = check_admin_auth(&state, &headers) {
+        return api_err_response(e);
+    }
     let id = body
         .get("id")
         .and_then(|v| v.as_str())

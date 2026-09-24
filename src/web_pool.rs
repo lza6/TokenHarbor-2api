@@ -174,10 +174,18 @@ impl WebCookiePool {
         let st = states.entry(id.to_string()).or_default();
         st.failures += 1;
         st.health = (st.health * 0.6).max(0.0);
-        if status == 401 || status == 403 {
-            // 冷却 10 分钟；连续失败指数退避
-            let base = 600 * st.failures.min(6) as i64;
-            st.cooling_until = Some(chrono::Utc::now().timestamp() + base);
+        match status {
+            // 401/403：认证失败，冷却 10 分钟起指数退避（上限 1h）
+            401 | 403 => {
+                let base = 600 * st.failures.min(6) as i64;
+                st.cooling_until = Some(chrono::Utc::now().timestamp() + base);
+            }
+            // 429：限流，短冷却 60 秒起（防连续选中触发上游风控）
+            429 => {
+                let base = 60 * st.failures.min(6) as i64;
+                st.cooling_until = Some(chrono::Utc::now().timestamp() + base);
+            }
+            _ => {}
         }
         st.last_used = Some(chrono::Utc::now().timestamp());
     }
