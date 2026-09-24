@@ -35,6 +35,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(handle_healthz))
         .route("/v1/models", get(handle_v1_models))
         .route("/v1/chat/completions", post(handle_chat_completions))
+        .route("/v1/responses", post(handle_responses))
         .route("/v1/messages", post(handle_claude_messages))
         .route("/api/tokens", get(handle_tokens_list))
         .route("/api/tokens/import", post(handle_tokens_import))
@@ -144,6 +145,204 @@ pub struct ChatMessage {
     pub name: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<serde_json::Value>,
+}
+
+/// OpenAI Responses API 请求体（/v1/responses）
+#[derive(Debug, Deserialize)]
+pub struct ResponsesRequest {
+    pub model: String,
+    /// input 可以是字符串或消息数组
+    #[serde(default)]
+    pub input: serde_json::Value,
+    #[serde(default)]
+    pub stream: bool,
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub max_output_tokens: Option<u64>,
+    #[serde(default)]
+    pub tools: Option<serde_json::Value>,
+    #[serde(default)]
+    pub user: Option<String>,
+}
+
+/// 从 Responses input 提取文本内容（支持 string / 消息数组）
+fn responses_input_text(input: &serde_json::Value) -> String {
+    match input {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(arr) => {
+            let mut out = String::new();
+            for item in arr {
+                // 消息对象：{"role":"user","content":[...]}
+                if let Some(content) = item.get("content") {
+                    match content {
+                        serde_json::Value::String(t) => out.push_str(t),
+                        serde_json::Value::Array(parts) => {
+                            for part in parts {
+                                if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                                    out.push_str(t);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            out
+        }
+        _ => String::new(),
+    }
+}
+
+/// 从 Responses input 提取附件（图片）
+fn responses_attachments(input: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut atts = Vec::new();
+    if let serde_json::Value::Array(arr) = input {
+        for item in arr {
+            if let Some(serde_json::Value::Array(parts)) = item.get("content") {
+                for part in parts {
+                    if part.get("type").and_then(|v| v.as_str()) == Some("input_image") {
+                        if let Some(url) = part.get("image_url").and_then(|v| v.as_str()) {
+                            if url.starts_with("data:image/") {
+                                let (mime, b64) = split_data_url(url);
+                                atts.push(serde_json::json!({
+                                    "kind": "image",
+                                    "mime": mime,
+                                    "name": format!("image-{}.{}", atts.len() + 1, mime_ext(&mime)),
+                                    "bytes": b64.len() as u64,
+                                    "data_url": url
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    atts
+}
+
+/// OpenAI Responses API handler（/v1/responses）
+async fn handle_responses(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ResponsesRequest>,
+) -> Response {
+    if let Err(e) = check_api_key(&state.cfg, &state.api_keys, &headers) {
+        return api_err_response(e);
+    }
+    let created = chrono::Utc::now().timestamp();
+    let response_id = format!(
+        "resp_{}_{}",
+        created,
+        uuid::Uuid::new_v4()
+            .simple()
+            .to_string()
+            .chars()
+            .take(12)
+            .collect::<String>()
+    );
+    let model = state.registry.resolve(&body.model).await;
+
+    let Some(cred) = state.pool.pick(None).await else {
+        return api_err_response(ApiError::unauthorized(
+            "未导入 TokenHarbor Cookie 凭证。请 POST /api/tokens/import 粘贴 sb-auth-auth-token Cookie",
+        ));
+    };
+    let Some(client) = state.clients.first().cloned() else {
+        return api_err_response(ApiError::internal("客户端未初始化"));
+    };
+
+    let is_free = model.contains(":free");
+    let _permit = state.semaphore.acquire(is_free, false).await;
+
+    let content = responses_input_text(&body.input);
+    if content.trim().is_empty() && responses_attachments(&body.input).is_empty() {
+        return api_err_response(ApiError::bad_request("input 内容为空"));
+    }
+
+    let thread_key = body
+        .user
+        .clone()
+        .unwrap_or_else(|| "default-thread".to_string());
+    let initial_binding = match state
+        .sessions
+        .ensure(&thread_key, &client, &model, Some(&cred.cookie))
+        .await
+    {
+        Ok(b) => b,
+        Err(e) => {
+            state.pool.record_failure(&cred.id, 401).await;
+            return api_err_response(ApiError::upstream(format!("创建上游会话失败: {e}")));
+        }
+    };
+    let mut binding = initial_binding;
+    let mut retried_429 = false;
+    let mut attempt = 0usize;
+    let resp_result: Result<reqwest::Response, anyhow::Error> = loop {
+        attempt += 1;
+        let atts = responses_attachments(&body.input);
+        let stream_req = crate::upstream::StreamRequest {
+            session_id: binding.upstream_id.clone(),
+            content: content.clone(),
+            model: model.clone(),
+            attachments: if atts.is_empty() { None } else { Some(atts) },
+            web_search: Some("auto".into()),
+            tz: Some(crate::upstream::UpstreamClient::timezone()),
+            use_kb: None,
+            rewind_to: None,
+        };
+        match client.stream(&stream_req, Some(&cred.cookie)).await {
+            Ok(up) => break Ok(up),
+            Err(e) if crate::upstream::UpstreamClient::is_rate_limited(&e) && !retried_429 => {
+                tracing::warn!("上游 429 会话限流，切换新会话重试 (attempt {attempt})");
+                retried_429 = true;
+                let _ = state.sessions.remove(&thread_key).await;
+                match state
+                    .sessions
+                    .ensure(&thread_key, &client, &model, Some(&cred.cookie))
+                    .await
+                {
+                    Ok(new_binding) => binding = new_binding,
+                    Err(e2) => break Err(anyhow::anyhow!("429 换会话失败: {e2}")),
+                }
+                continue;
+            }
+            Err(e) => break Err(e),
+        }
+    };
+
+    match resp_result {
+        Ok(up) => {
+            state.pool.record_success(&cred.id).await;
+            state.sessions.touch(&thread_key, 2).await;
+            if body.stream {
+                let s = crate::protocol::responses_sse::responses_events(up, &model, &response_id);
+                let body = axum::body::Body::from_stream(s);
+                crate::protocol::responses_sse::ResponsesSseResponse { body }.into_response()
+            } else {
+                let text = collect_nonstream_text(up).await;
+                let body = crate::protocol::responses_sse::responses_nonstream(
+                    &text,
+                    &model,
+                    &response_id,
+                );
+                Response::builder()
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(text_body(&body)))
+                    .unwrap()
+            }
+        }
+        Err(e) => {
+            if crate::upstream::UpstreamClient::is_rate_limited(&e) {
+                state.pool.record_failure(&cred.id, 429).await;
+                api_err_response(ApiError::rate_limited(format!("上游限流，请稍后重试: {e}")))
+            } else {
+                state.pool.record_failure(&cred.id, 502).await;
+                api_err_response(ApiError::upstream(format!("上游对话失败: {e}")))
+            }
+        }
+    }
 }
 
 fn message_text(content: &serde_json::Value) -> String {

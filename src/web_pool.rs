@@ -119,12 +119,14 @@ impl WebCookiePool {
         removed
     }
 
-    /// 选一个可用凭证：健康分最高、不在冷却期
+    /// 选一个可用凭证：健康分最高 + 最旧未使用优先（轮询均衡）
+    /// - 排除冷却期/健康分过低的
+    /// - 同健康分时选 last_used 最旧的（避免永远选第一个 → 多账号负载均衡）
     pub async fn pick(&self, exclude: Option<&str>) -> Option<Credential> {
         let now = chrono::Utc::now().timestamp();
         let creds = self.creds.read().await;
         let states = self.states.read().await;
-        let mut best: Option<(f64, usize, &Credential)> = None;
+        let mut best: Option<(f64, i64, usize, &Credential)> = None;
         for (i, c) in creds.iter().enumerate() {
             if let Some(ex) = exclude {
                 if c.id == ex {
@@ -137,12 +139,25 @@ impl WebCookiePool {
                     continue;
                 }
             }
-            let score = st.health - (i as f64) * 0.001;
-            if best.as_ref().map(|(s, _, _)| score > *s).unwrap_or(true) {
-                best = Some((score, i, c));
+            // 健康分过低（<0.3）跳过（连续失败过）
+            if st.health < 0.3 {
+                continue;
+            }
+            // last_used：None(未用过) 优先；否则越旧越好
+            let last = st.last_used.unwrap_or(i64::MIN);
+            let score = st.health;
+            let better = match best {
+                None => true,
+                Some((bs, blast, _, _)) => {
+                    score > bs + 0.001 // 健康分优先
+                        || ((score - bs).abs() <= 0.001 && last < blast) // 同分取最旧
+                }
+            };
+            if better {
+                best = Some((score, last, i, c));
             }
         }
-        best.map(|(_, _, c)| c.clone())
+        best.map(|(_, _, _, c)| c.clone())
     }
 
     pub async fn record_success(&self, id: &str) {
