@@ -33,13 +33,24 @@ curl -X POST http://127.0.0.1:47830/api/tokens/login \
 
 网关直接调用 TokenHarbor 的 Supabase 认证接口（`auth.tokenharbor.ai/auth/v1/token?grant_type=password`）登录并入库。
 
-**方式 B：浏览器登录 + 导入 Cookie**
+**方式 B：浏览器登录 + 导入 Cookie（多格式自动识别）**
 
 1. 浏览器打开 tokenharbor.ai → 登录（Google / GitHub / 邮箱）
-2. F12 → Network → 任意请求 → 复制完整 `cookie:` 整行（含 `sb-auth-auth-token.0` / `sb-auth-auth-token.1` / `th_sid`）
-3. 调 `/api/tokens/import` 粘贴导入
+2. 复制以下任一格式，调 `/api/tokens/import` 粘贴（`{"cookie": "..."}`）：
+   - 裸 Cookie 头：F12 → Network → 任意请求 → 复制完整 `cookie:` 整行（含 `sb-auth-auth-token.0` / `sb-auth-auth-token.1` / `th_sid`）
+   - curl 命令：`curl '...' -b 'cookie...'` 或 `-H 'Cookie: ...'`（含 Windows `^"` 转义）
+   - HAR 文件：浏览器 DevTools → Network → Export HAR，粘贴文件内容
+   - Netscape cookie jar / Chromium / Firefox JSON 导出
+3. 响应自动返回 `refreshable` + `expires_at` + `hint`：
+   - `refreshable: true` → 该凭证含 refresh_token，网关每 50 分钟自动续期，无需重新登录
+   - `refreshable: false` → 未检测到 refresh_token，过期后需重新登录导入（或改用方式 A 邮箱密码）
+   - 无法识别 → 400 + 提示支持的格式
 
 **方式 C：启动自动续期（已验证闭环）**
+
+网关启动时 + 每 50 分钟自动用 refresh_token 换新 access_token（`POST /api/tokens/refresh-all` 可手动触发）。续期后仅保留 `token.0`（移除 `token.1`，上游实测带 token.1 的续期 cookie 会 401），**真实 E2E 已验证续期后对话正常**，无需重复登录。
+
+> ⚠️ refresh_token 是一次性的（Supabase 特性）：被浏览器或网关用过一次后即失效（`refresh_token_already_used`）。此时 access_token 可能仍有效（可继续请求），但到期后需重新登录拿新会话。**方式 C：启动自动续期（已验证闭环）**
 
 网关启动时 + 每 50 分钟自动用 refresh_token 换新 access_token（`POST /api/tokens/refresh-all` 可手动触发）。续期后仅保留 `token.0`（移除 `token.1`，上游实测带 token.1 的续期 cookie 会 401），**真实 E2E 已验证续期后对话正常**，无需重复登录。
 

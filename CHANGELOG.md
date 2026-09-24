@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.2.4 (2026-09-24)
+
+### 新增 — 凭证导入多格式自动识别 + 续期诊断
+
+- 新增 `src/import_parse.rs`：粘贴即自动识别 7 种格式
+  - 裸 Cookie 头 / `Cookie:` 前缀
+  - curl `-b` / `curl -H 'Cookie: ...'`（含 Windows `^"` cmd 转义）
+  - HAR 文件（entries[].request.cookies）
+  - Netscape cookie jar（`#HttpOnly_` 域名行）
+  - Chromium / Firefox JSON 导出（[{name,value,domain}]）
+  - 无法识别 → 400 + 明确提示
+- 导入响应新增诊断字段：
+  - `refreshable`：cookie 是否含 refresh_token（能否自动续期）
+  - `expires_at`：access_token 过期时刻
+  - `hint`：续期能力明确提示（可续 / 需重登）
+- `GET /api/tokens` 列表新增 `refreshable` + `expires_at`（UI 徽章数据源）
+- Web UI：导入面板说明多格式 + 凭证列表"续期"徽章（可续期绿 / 需重登灰）+ 导入 toast 显示 hint
+
+### 真实 E2E 验证（2026-09-24）
+
+- 6 种格式（裸 / 前缀 / curl -b / curl -H / HAR / jar / JSON）全部 200 且自动识别
+- 7 个不同值格式 → 7 个独立凭证（去重不误伤），垃圾/空输入 → 400 + 提示
+- 真实 cookie HAR 导入 → `refreshable: true` + `expires_at` + 正确 hint
+- refresh-all 触发 → `refresh_token_already_used` 正确诊断（refresh_token 一次性）
+- 测试 22/22 通过（新增 8 个 import_parse 单测），clippy -D warnings 全绿
+
 ## v0.2.3 (2026-09-24)
 
 ### 新增 — /v1/responses 原生格式 + 多账号加权轮询
