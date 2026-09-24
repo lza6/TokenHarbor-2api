@@ -223,12 +223,16 @@ TokenHarbor 站点（Next.js + Supabase + Vercel）核心端点：
 | 凭证池 | ✅ | 健康分 / 401 冷却 / 轮询换号 |
 | 自动续期 | ✅ | refresh_token 换新 access_token（启动 + 定时 + 手动） |
 | 多账号负载均衡 | ✅ | 加权轮询：健康分优先 + 同分最旧未使用优先（交替使用多账号） |
-| 429 自动处理 | ✅ | 会话级限流自动换新会话重试 + 账号级限流透传 429 |
+| 429 自动处理 | ✅ | 会话级限流自动换新会话重试 + 账号级限流透传 429+Retry-After；冷却期返回 429（不再误报 401），冷却后回退池自动复活 |
 | 单账号并发控制 | ✅ | 分层信号量：免费单会话 1 / 免费多会话 3 / 付费单会话 3 / 付费多会话 8 |
 | 会话上限与清理 | ✅ | 上限 200（对齐上游），24h 空闲自动清理，per-key 互斥防并发重复建会话 |
 | `/v1/responses` | ✅ | OpenAI Responses API 原生格式（流式 SSE 全事件链 + 非流式 response 对象） |
 | 邮箱登录 | ✅ | Supabase password grant 直接登录入库 |
 | 会话复用 | ✅ | 每线程绑定上游 session，多轮上下文连续 |
+| TH-Rudder 真实能力 | ✅ | context 1M / max_output 4096 / 单消息 ≤32,000 字符（上游实测，网关预检 400） |
+| 登录防爆破 | ✅ | /api/ui/login、/api/tokens/login 指数退避锁定 + Retry-After |
+| CORS | ✅ | cors_allow_origins 白名单（默认关闭，显式配置后浏览器直连） |
+| 错误脱敏 | ✅ | 上游错误截断 240 字符 + 打码（API Key/Cookie/Bearer/base64/密码） |
 
 ---
 
@@ -247,11 +251,14 @@ TokenHarbor 站点（Next.js + Supabase + Vercel）核心端点：
   "sqlite_path": "data/tokenharbor2api.sqlite",
   "tokens_path": "data/tokens.json",
   "skip_upstream_check": true,
-  "redact_logs": true
+  "redact_logs": true,
+  "cors_allow_origins": []
 }
 ```
 
-环境变量优先：`LISTEN_ADDR` / `AUTH_TOKENS` / `API_KEYS` / `HTTP_PROXY` / `UPSTREAM_BASE_URL`。
+环境变量优先：`LISTEN_ADDR` / `AUTH_TOKENS` / `API_KEYS` / `HTTP_PROXY` / `UPSTREAM_BASE_URL` / `CORS_ALLOW_ORIGINS`。
+
+> `cors_allow_origins`：浏览器网页直连网关时需把网页 Origin 加入白名单（如 `["https://app.example.com"]`，或 `["*"]` 放开）。默认空数组 = 不响应 CORS 预检。
 
 ---
 
