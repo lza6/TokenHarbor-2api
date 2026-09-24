@@ -56,6 +56,9 @@ pub struct Config {
     /// 日志脱敏
     #[serde(default = "default_true")]
     pub redact_logs: bool,
+    /// CORS 允许来源（浏览器直连网关时需要；空数组=关闭 CORS）
+    #[serde(default)]
+    pub cors_allow_origins: Vec<String>,
     /// 每账号并发槽（免费/付费/多会话）
     #[serde(default = "default_conc")]
     pub concurrency_free_slots: usize,
@@ -135,6 +138,7 @@ impl Default for Config {
             web_dir: String::new(),
             skip_upstream_check: default_true(),
             redact_logs: default_true(),
+            cors_allow_origins: vec![],
             concurrency_free_slots: default_conc(),
             concurrency_free_multi: default_conc3(),
             concurrency_sub_slots: default_conc3(),
@@ -183,6 +187,13 @@ impl Config {
         }
         if let Ok(v) = std::env::var("HTTP_PROXY") {
             cfg.http_proxy = v;
+        }
+        if let Ok(v) = std::env::var("CORS_ALLOW_ORIGINS") {
+            cfg.cors_allow_origins = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
         Ok(cfg)
     }

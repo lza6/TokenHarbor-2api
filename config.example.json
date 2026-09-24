@@ -22,6 +22,7 @@
   "web_dir": "",
   "skip_upstream_check": true,
   "redact_logs": true,
+  "cors_allow_origins": [],
   "concurrency_free_slots": 1,
   "concurrency_free_multi": 3,
   "concurrency_sub_slots": 3,

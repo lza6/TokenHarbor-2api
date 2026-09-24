@@ -8,13 +8,15 @@ use crate::protocol::openai_sse::SseResponse;
 use crate::session::SessionMap;
 use crate::upstream::{StreamRequest, UpstreamClient};
 use crate::web_pool::WebCookiePool;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::HeaderMap;
+use axum::middleware::Next;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -26,6 +28,7 @@ pub struct AppState {
     pub sessions: Arc<SessionMap>,
     pub api_keys: Arc<std::sync::RwLock<Vec<String>>>,
     pub semaphore: Arc<crate::semaphore::TieredSemaphore>,
+    pub login_guard: Arc<crate::ratelimit::LoginGuard>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -54,7 +57,55 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/direct-chat/upload", post(handle_upstream_upload))
         .route("/v1/uploads", post(handle_v1_uploads))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), cors_mw))
         .with_state(state)
+}
+
+// ---------- CORS ----------
+
+/// 轻量 CORS 中间件：仅当 Origin 在允许列表（或配置 "*"）时回带 CORS 头；
+/// 默认关闭（空列表）。避免为浏览器客户端放开认证边界。
+async fn cors_mw(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let origins = state.cfg.cors_allow_origins.clone();
+    let origin = request
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(|o| o.to_string());
+    let allowed = origin
+        .as_ref()
+        .map(|o| origins.iter().any(|a| a == "*" || a == o))
+        .unwrap_or(false);
+    let mut response = if request.method() == axum::http::Method::OPTIONS {
+        Response::builder()
+            .status(204)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    } else {
+        next.run(request).await
+    };
+    if allowed {
+        if let Some(o) = origin {
+            if let Ok(val) = axum::http::HeaderValue::from_str(&o) {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
+            }
+        }
+        response.headers_mut().insert(
+            axum::http::header::ACCESS_CONTROL_ALLOW_METHODS,
+            axum::http::HeaderValue::from_static("GET, POST, OPTIONS, DELETE, PATCH"),
+        );
+        response.headers_mut().insert(
+            axum::http::header::ACCESS_CONTROL_ALLOW_HEADERS,
+            axum::http::HeaderValue::from_static("Content-Type, Authorization, X-API-Key"),
+        );
+        response.headers_mut().insert(
+            axum::http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            axum::http::HeaderValue::from_static("true"),
+        );
+    }
+    response
 }
 
 // ---------- 认证 ----------
@@ -170,8 +221,16 @@ async fn handle_dashboard(State(state): State<AppState>, headers: HeaderMap) -> 
 /// Web UI 登录：POST /api/ui/login {password} → 设置 session cookie
 async fn handle_ui_login(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
+    let ip_key = format!("{}:ui", addr.ip());
+    if let Some(secs) = state.login_guard.check(&ip_key).await {
+        return api_err_response_retry(
+            ApiError::rate_limited("尝试次数过多，请稍后再试"),
+            secs as i64,
+        );
+    }
     if state.cfg.ui_password.is_empty() {
         return api_err_response(ApiError::bad_request("UI 未配置密码，无需登录"));
     }
@@ -190,8 +249,10 @@ async fn handle_ui_login(
         diff |= av ^ bv;
     }
     if diff != 0 {
-        return api_err_response(ApiError::unauthorized("密码错误"));
+        let cd = state.login_guard.record_failure(&ip_key).await;
+        return api_err_response_retry(ApiError::unauthorized("密码错误"), cd as i64);
     }
+    state.login_guard.clear(&ip_key).await;
     let token = crate::ui_auth::issue_token(&state.cfg.ui_password);
     Response::builder()
         .status(200)
@@ -355,6 +416,13 @@ async fn handle_responses(
     let model = state.registry.resolve(&body.model).await;
 
     let Some(cred) = state.pool.pick(None).await else {
+        let wait = state.pool.cooling_until_max().await;
+        if wait > 0 {
+            return api_err_response_retry(
+                ApiError::rate_limited("上游限流冷却中，请稍后重试"),
+                wait,
+            );
+        }
         return api_err_response(ApiError::unauthorized(
             "未导入 TokenHarbor Cookie 凭证。请 POST /api/tokens/import 粘贴 sb-auth-auth-token Cookie",
         ));
@@ -367,6 +435,9 @@ async fn handle_responses(
     let _permit = state.semaphore.acquire(is_free, false).await;
 
     let content = responses_input_text(&body.input);
+    if let Some(resp) = enforce_char_caps(&state, &model, std::slice::from_ref(&content)).await {
+        return resp;
+    }
     if content.trim().is_empty() && responses_attachments(&body.input).is_empty() {
         return api_err_response(ApiError::bad_request("input 内容为空"));
     }
@@ -383,7 +454,10 @@ async fn handle_responses(
         Ok(b) => b,
         Err(e) => {
             state.pool.record_failure(&cred.id, 401).await;
-            return api_err_response(ApiError::upstream(format!("创建上游会话失败: {e}")));
+            return api_err_response(ApiError::upstream(format!(
+                "创建上游会话失败: {}",
+                crate::redact::truncate(&crate::redact::redact(&e.to_string()), 240)
+            )));
         }
     };
     let mut binding = initial_binding;
@@ -414,7 +488,12 @@ async fn handle_responses(
                     .await
                 {
                     Ok(new_binding) => binding = new_binding,
-                    Err(e2) => break Err(anyhow::anyhow!("429 换会话失败: {e2}")),
+                    Err(e2) => {
+                        break Err(anyhow::anyhow!(
+                            "429 换会话失败: {}",
+                            crate::redact::truncate(&crate::redact::redact(&e2.to_string()), 240)
+                        ))
+                    }
                 }
                 continue;
             }
@@ -445,11 +524,14 @@ async fn handle_responses(
         }
         Err(e) => {
             if crate::upstream::UpstreamClient::is_rate_limited(&e) {
-                state.pool.record_failure(&cred.id, 429).await;
-                api_err_response(ApiError::rate_limited(format!("上游限流，请稍后重试: {e}")))
+                let cd = state.pool.record_failure(&cred.id, 429).await;
+                api_err_response_retry(ApiError::rate_limited("上游限流，请稍后重试"), cd)
             } else {
                 state.pool.record_failure(&cred.id, 502).await;
-                api_err_response(ApiError::upstream(format!("上游对话失败: {e}")))
+                api_err_response(ApiError::upstream(format!(
+                    "上游对话失败: {}",
+                    crate::redact::truncate(&crate::redact::redact(&e.to_string()), 240)
+                )))
             }
         }
     }
@@ -536,6 +618,13 @@ async fn handle_chat_completions(
 
     // 选凭证
     let Some(cred) = state.pool.pick(None).await else {
+        let wait = state.pool.cooling_until_max().await;
+        if wait > 0 {
+            return api_err_response_retry(
+                ApiError::rate_limited("上游限流冷却中，请稍后重试"),
+                wait,
+            );
+        }
         return api_err_response(ApiError::unauthorized("未导入 TokenHarbor Cookie 凭证。请 POST /api/tokens/import 粘贴 sb-auth-auth-token Cookie"));
     };
     // 选客户端
@@ -552,6 +641,14 @@ async fn handle_chat_completions(
     let content = last_user
         .map(|m| message_text(&m.content))
         .unwrap_or_default();
+    let texts: Vec<String> = body
+        .messages
+        .iter()
+        .map(|m| message_text(&m.content))
+        .collect();
+    if let Some(resp) = enforce_char_caps(&state, &model, &texts).await {
+        return resp;
+    }
     if content.trim().is_empty() && extract_attachments(&body.messages).is_empty() {
         return api_err_response(ApiError::bad_request("消息内容为空"));
     }
@@ -569,7 +666,10 @@ async fn handle_chat_completions(
         Ok(b) => b,
         Err(e) => {
             state.pool.record_failure(&cred.id, 401).await;
-            return api_err_response(ApiError::upstream(format!("创建上游会话失败: {e}")));
+            return api_err_response(ApiError::upstream(format!(
+                "创建上游会话失败: {}",
+                crate::redact::truncate(&crate::redact::redact(&e.to_string()), 240)
+            )));
         }
     };
     let mut binding = initial_binding;
@@ -601,7 +701,12 @@ async fn handle_chat_completions(
                     .await
                 {
                     Ok(new_binding) => binding = new_binding,
-                    Err(e2) => break Err(anyhow::anyhow!("429 换会话失败: {e2}")),
+                    Err(e2) => {
+                        break Err(anyhow::anyhow!(
+                            "429 换会话失败: {}",
+                            crate::redact::truncate(&crate::redact::redact(&e2.to_string()), 240)
+                        ))
+                    }
                 }
                 continue;
             }
@@ -635,11 +740,14 @@ async fn handle_chat_completions(
         Err(e) => {
             if crate::upstream::UpstreamClient::is_rate_limited(&e) {
                 // 429 透传为 429（客户端正确退避），并记录凭证冷却
-                state.pool.record_failure(&cred.id, 429).await;
-                api_err_response(ApiError::rate_limited(format!("上游限流，请稍后重试: {e}")))
+                let cd = state.pool.record_failure(&cred.id, 429).await;
+                api_err_response_retry(ApiError::rate_limited("上游限流，请稍后重试"), cd)
             } else {
                 state.pool.record_failure(&cred.id, 502).await;
-                api_err_response(ApiError::upstream(format!("上游对话失败: {e}")))
+                api_err_response(ApiError::upstream(format!(
+                    "上游对话失败: {}",
+                    crate::redact::truncate(&crate::redact::redact(&e.to_string()), 240)
+                )))
             }
         }
     }
@@ -729,6 +837,13 @@ async fn handle_claude_messages(
     let model = state.registry.resolve(&body.model).await;
 
     let Some(cred) = state.pool.pick(None).await else {
+        let wait = state.pool.cooling_until_max().await;
+        if wait > 0 {
+            return api_err_response_retry_anthropic(
+                ApiError::rate_limited("上游限流冷却中，请稍后重试"),
+                wait,
+            );
+        }
         return api_err_response_anthropic(ApiError::unauthorized(
             "未导入 TokenHarbor Cookie 凭证",
         ));
@@ -746,6 +861,14 @@ async fn handle_claude_messages(
     let content = last_user
         .map(|m| anthropic_text(&m.content))
         .unwrap_or_default();
+    let texts: Vec<String> = body
+        .messages
+        .iter()
+        .map(|m| anthropic_text(&m.content))
+        .collect();
+    if let Some(resp) = enforce_char_caps(&state, &model, &texts).await {
+        return resp;
+    }
     if content.trim().is_empty() {
         return api_err_response_anthropic(ApiError::bad_request("消息内容为空"));
     }
@@ -797,7 +920,12 @@ async fn handle_claude_messages(
                     .await
                 {
                     Ok(new_binding) => binding = new_binding,
-                    Err(e2) => break Err(anyhow::anyhow!("429 换会话失败: {e2}")),
+                    Err(e2) => {
+                        break Err(anyhow::anyhow!(
+                            "429 换会话失败: {}",
+                            crate::redact::truncate(&crate::redact::redact(&e2.to_string()), 240)
+                        ))
+                    }
                 }
                 continue;
             }
@@ -835,13 +963,14 @@ async fn handle_claude_messages(
         }
         Err(e) => {
             if crate::upstream::UpstreamClient::is_rate_limited(&e) {
-                state.pool.record_failure(&cred.id, 429).await;
-                api_err_response_anthropic(ApiError::rate_limited(format!(
-                    "上游限流，请稍后重试: {e}"
-                )))
+                let cd = state.pool.record_failure(&cred.id, 429).await;
+                api_err_response_retry_anthropic(ApiError::rate_limited("上游限流，请稍后重试"), cd)
             } else {
                 state.pool.record_failure(&cred.id, 502).await;
-                api_err_response_anthropic(ApiError::upstream(format!("上游对话失败: {e}")))
+                api_err_response_anthropic(ApiError::upstream(format!(
+                    "上游对话失败: {}",
+                    crate::redact::truncate(&crate::redact::redact(&e.to_string()), 240)
+                )))
             }
         }
     }
@@ -1008,9 +1137,17 @@ pub struct TokenLoginRequest {
 
 async fn handle_tokens_login(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<TokenLoginRequest>,
 ) -> Response {
+    let ip_key = format!("{}:login", addr.ip());
+    if let Some(secs) = state.login_guard.check(&ip_key).await {
+        return api_err_response_retry(
+            ApiError::rate_limited("尝试次数过多，请稍后再试"),
+            secs as i64,
+        );
+    }
     if let Err(e) = check_admin_auth(&state, &headers) {
         return api_err_response(e);
     }
@@ -1031,7 +1168,13 @@ async fn handle_tokens_login(
             state.pool.record_success(&cred.id).await;
             Json(json!({ "ok": true, "id": cred.id, "label": cred.label })).into_response()
         }
-        Err(e) => api_err_response(ApiError::upstream(format!("登录失败: {e}"))),
+        Err(e) => {
+            state.login_guard.record_failure(&ip_key).await;
+            api_err_response(ApiError::upstream(format!(
+                "登录失败: {}",
+                crate::redact::truncate(&crate::redact::redact(&e.to_string()), 240)
+            )))
+        }
     }
 }
 
@@ -1169,6 +1312,13 @@ async fn handle_me_free_tier(State(state): State<AppState>, headers: HeaderMap) 
         return api_err_response(e);
     }
     let Some(cred) = state.pool.pick(None).await else {
+        let wait = state.pool.cooling_until_max().await;
+        if wait > 0 {
+            return api_err_response_retry(
+                ApiError::rate_limited("上游限流冷却中，请稍后重试"),
+                wait,
+            );
+        }
         return api_err_response(ApiError::unauthorized("未导入凭证"));
     };
     let Some(client) = state.clients.first().cloned() else {
@@ -1185,6 +1335,13 @@ async fn handle_me_quotas(State(state): State<AppState>, headers: HeaderMap) -> 
         return api_err_response(e);
     }
     let Some(cred) = state.pool.pick(None).await else {
+        let wait = state.pool.cooling_until_max().await;
+        if wait > 0 {
+            return api_err_response_retry(
+                ApiError::rate_limited("上游限流冷却中，请稍后重试"),
+                wait,
+            );
+        }
         return api_err_response(ApiError::unauthorized("未导入凭证"));
     };
     let Some(client) = state.clients.first().cloned() else {
@@ -1212,6 +1369,13 @@ async fn handle_upstream_create_session(
         return api_err_response(e);
     }
     let Some(cred) = state.pool.pick(None).await else {
+        let wait = state.pool.cooling_until_max().await;
+        if wait > 0 {
+            return api_err_response_retry(
+                ApiError::rate_limited("上游限流冷却中，请稍后重试"),
+                wait,
+            );
+        }
         return api_err_response(ApiError::unauthorized("未导入凭证"));
     };
     let Some(client) = state.clients.first().cloned() else {
@@ -1246,6 +1410,13 @@ async fn handle_upstream_upload(
         return api_err_response(e);
     }
     let Some(cred) = state.pool.pick(None).await else {
+        let wait = state.pool.cooling_until_max().await;
+        if wait > 0 {
+            return api_err_response_retry(
+                ApiError::rate_limited("上游限流冷却中，请稍后重试"),
+                wait,
+            );
+        }
         return api_err_response(ApiError::unauthorized("未导入凭证"));
     };
     let Some(client) = state.clients.first().cloned() else {
@@ -1295,6 +1466,13 @@ async fn handle_v1_uploads(
         "file"
     };
     let Some(cred) = state.pool.pick(None).await else {
+        let wait = state.pool.cooling_until_max().await;
+        if wait > 0 {
+            return api_err_response_retry(
+                ApiError::rate_limited("上游限流冷却中，请稍后重试"),
+                wait,
+            );
+        }
         return api_err_response(ApiError::unauthorized("未导入凭证"));
     };
     let Some(client) = state.clients.first().cloned() else {
@@ -1313,6 +1491,44 @@ async fn handle_v1_uploads(
 }
 
 // ---------- 错误响应 ----------
+
+/// 单条消息字符上限预检（TH-Rudder 上游硬限 32,000 字符/消息，实测）
+async fn enforce_char_caps(state: &AppState, model: &str, texts: &[String]) -> Option<Response> {
+    let meta = state.registry.meta(model).await?;
+    if meta.max_input_chars <= 0 {
+        return None;
+    }
+    for t in texts {
+        let n = t.chars().count() as i64;
+        if n > meta.max_input_chars {
+            return Some(api_err_response(ApiError::bad_request(format!(
+                "单条消息长度 {n} 字符超过该模型上游限制 {} 字符，请拆分后重试",
+                meta.max_input_chars
+            ))));
+        }
+    }
+    None
+}
+
+fn api_err_response_retry(e: ApiError, retry_after: i64) -> Response {
+    let mut resp = api_err_response(e);
+    if retry_after > 0 {
+        if let Ok(v) = axum::http::HeaderValue::from_str(&retry_after.to_string()) {
+            resp.headers_mut().insert("retry-after", v);
+        }
+    }
+    resp
+}
+
+fn api_err_response_retry_anthropic(e: ApiError, retry_after: i64) -> Response {
+    let mut resp = api_err_response_anthropic(e);
+    if retry_after > 0 {
+        if let Ok(v) = axum::http::HeaderValue::from_str(&retry_after.to_string()) {
+            resp.headers_mut().insert("retry-after", v);
+        }
+    }
+    resp
+}
 
 fn api_err_response(e: ApiError) -> Response {
     let status = e.status();

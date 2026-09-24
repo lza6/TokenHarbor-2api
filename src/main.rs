@@ -199,12 +199,17 @@ async fn main() -> anyhow::Result<()> {
         sessions,
         api_keys,
         semaphore,
+        login_guard: Arc::new(tokenharbor2api::ratelimit::LoginGuard::new()),
     };
 
     let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind(&listen_addr).await?;
     tracing::info!("HTTP 服务已启动: http://{listen_addr}");
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

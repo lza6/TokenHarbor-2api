@@ -1,6 +1,11 @@
 //! 模型注册表：TokenHarbor 模型目录 + 能力元数据
 //!
-//! 数据来源（2026-09-23 实时抓取 https://tokenharbor.ai/models RSC）：
+//! 数据来源（2026-09-23 实时抓取 https://tokenharbor.ai/models RSC；2026-09-25 真实上游实测）：
+//! - TH-Rudder 真实限制（JS 常量 + 上游 API 实测）：
+//!   · CHAT_MAX_OUTPUT_TOKENS_CAP = 4096（最大输出）
+//!   · 单条消息硬限 32,000 字符（上游 SSE error too_long：100,020 → 拒绝 / 30,000 → OK）
+//!   · 会话长上下文实测：12×30k 字符多消息累计 ≈360k 字符返回 OK（窗口远超 200k 硬编码假设）
+//!   · "Chat with TH-Rudder has no daily cap; only the speed limits apply"（免费无限、仅速度限制）
 //! - 18 个付费 surface（priceIn/priceOut per 1M tokens, USD）
 //! - 3 个免费 route（mimo-v2.6-flash:free / qwen3.8-flash:free / deepseek-v4.1-flash:free）
 //! - 1 个默认免费 th-rudder:free（站点常量 DEFAULT_CHAT_MODEL）
@@ -44,6 +49,9 @@ pub const SURFACE_PROVIDER: &[(&str, &str)] = &[
 ];
 
 /// 免费 route：provider/surface:free
+/// 单条消息字符上限（上游硬限；0=不限制）
+pub const PER_MESSAGE_CHAR_CAPS: &[(&str, i64)] = &[("th-rudder:free", 32_000)];
+
 pub const FREE_MODELS: &[&str] = &[
     "xiaomi/mimo-v2.6-flash:free",
     "alibaba/qwen3.8-flash:free",
@@ -86,6 +94,9 @@ pub struct ModelMeta {
     pub context_window: i64,
     /// 最大输出 tokens（官方文档）
     pub max_output: i64,
+    /// 单条消息最大字符数（0=不限制；TH-Rudder 上游实测 32,000）
+    #[serde(default)]
+    pub max_input_chars: i64,
 }
 
 /// 权威底座（与实时快照一致）
@@ -115,6 +126,7 @@ pub fn catalog() -> Vec<ModelMeta> {
                 },
                 context_window: $ctx,
                 max_output: $mo,
+                max_input_chars: 0,
             });
         };
     }
@@ -467,9 +479,17 @@ pub fn catalog() -> Vec<ModelMeta> {
         tools: true,
         reasoning: true,
         free_until: None,
-        context_window: 200_000,
-        max_output: 64_000,
+        // TH-Rudder：会话长上下文（实测 12×30k 字符 ≈360k 字符 OK）；单消息硬限见 PER_MESSAGE_CHAR_CAPS
+        context_window: 1_000_000,
+        max_output: 4_096,
+        max_input_chars: 32_000,
     });
+    // 单条消息字符上限（上游硬限）回填
+    for meta in v.iter_mut() {
+        if let Some((_, cap)) = PER_MESSAGE_CHAR_CAPS.iter().find(|(id, _)| *id == meta.id) {
+            meta.max_input_chars = *cap;
+        }
+    }
     v
 }
 
