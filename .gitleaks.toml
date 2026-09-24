@@ -1,0 +1,14 @@
+# Gitleaks config — secret scanning
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Exclude data/artifacts dirs"
+paths = [
+  "target/",
+  ".git/",
+  "data/",
+  "graft/",
+  "源代码、网络数据包/",
+  "reference/",
+]

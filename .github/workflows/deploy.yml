@@ -1,0 +1,82 @@
+# TokenHarbor2API — Déploiement staging/prod + rollback
+# - develop → staging (auto)
+# - main/tag → production (approbation manuelle via environment)
+name: Deploy
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      rollback:
+        description: "Rollback to previous release"
+        required: false
+        default: "false"
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: lza6/tokenharbor2api
+
+jobs:
+  deploy-staging:
+    name: Deploy Staging
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull & deploy staging
+        run: |
+          echo "Staging image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging-${{ github.sha }}"
+          echo "Deploy réel (docker compose / SSH) à configurer avec vos credentials"
+      - name: Healthcheck staging
+        run: echo "curl -sf http://staging-host/healthz (à configurer)"
+
+  deploy-production:
+    name: Deploy Production
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull & deploy production
+        run: |
+          echo "Production image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          echo "Déploiement réel (docker compose / orchestrateur) à configurer"
+      - name: Healthcheck production
+        run: echo "curl -sf https://production-host/healthz (à configurer)"
+
+  rollback:
+    name: Rollback
+    if: github.event.inputs.rollback == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Rollback to previous image
+        run: |
+          echo "Rollback demandé — restaurer l''image précédente (voir GHCR tags)"
+          echo "Exemple: docker compose down && docker compose pull <prev> && up"
