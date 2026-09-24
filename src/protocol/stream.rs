@@ -1,15 +1,19 @@
 //! 辅助：bytes_stream 适配（reqwest 流 → tokio AsyncBufRead）
 
-use tokio::io::{AsyncRead, ReadBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, ReadBuf};
 
 /// 把 reqwest bytes stream 包装成 tokio AsyncRead
 pub fn reader_with_bytes<S>(stream: S) -> BytesReader<S>
 where
     S: futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin + Send + 'static,
 {
-    BytesReader { stream, buf: Vec::new(), eof: false }
+    BytesReader {
+        stream,
+        buf: Vec::new(),
+        eof: false,
+    }
 }
 
 pub struct BytesReader<S> {

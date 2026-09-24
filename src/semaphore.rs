@@ -31,14 +31,30 @@ impl TieredSemaphore {
     pub async fn acquire(&self, is_free: bool, multi_session: bool) -> OwnedSemaphorePermit {
         if is_free {
             if multi_session {
-                self.free_multi.clone().acquire_owned().await.expect("semaphore closed")
+                self.free_multi
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .expect("semaphore closed")
             } else {
-                self.free_slots.clone().acquire_owned().await.expect("semaphore closed")
+                self.free_slots
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .expect("semaphore closed")
             }
         } else if multi_session {
-            self.sub_multi.clone().acquire_owned().await.expect("semaphore closed")
+            self.sub_multi
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("semaphore closed")
         } else {
-            self.sub_slots.clone().acquire_owned().await.expect("semaphore closed")
+            self.sub_slots
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("semaphore closed")
         }
     }
 }

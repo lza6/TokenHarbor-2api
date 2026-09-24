@@ -64,12 +64,24 @@ pub struct Config {
     pub concurrency_sub_multi: usize,
 }
 
-fn default_listen() -> String { "127.0.0.1:47830".into() }
-fn default_upstream() -> String { "https://tokenharbor.ai".into() }
-fn default_rotation() -> u64 { 21600 }
-fn default_timeout() -> u64 { 900 }
-fn default_keepalive() -> u64 { 45 }
-fn default_model() -> String { "th-rudder:free".into() }
+fn default_listen() -> String {
+    "127.0.0.1:47830".into()
+}
+fn default_upstream() -> String {
+    "https://tokenharbor.ai".into()
+}
+fn default_rotation() -> u64 {
+    21600
+}
+fn default_timeout() -> u64 {
+    900
+}
+fn default_keepalive() -> u64 {
+    45
+}
+fn default_model() -> String {
+    "th-rudder:free".into()
+}
 fn default_fallbacks() -> Vec<String> {
     vec![
         "qwen3.8-flash:free".into(),
@@ -77,13 +89,27 @@ fn default_fallbacks() -> Vec<String> {
         "mimo-v2.6-flash:free".into(),
     ]
 }
-fn default_sqlite() -> String { "data/tokenharbor2api.sqlite".into() }
-fn default_tokens() -> String { "data/tokens.json".into() }
-fn default_telemetry() -> String { "data/telemetry.sqlite".into() }
-fn default_true() -> bool { true }
-fn default_conc() -> usize { 1 }
-fn default_conc3() -> usize { 3 }
-fn default_conc8() -> usize { 8 }
+fn default_sqlite() -> String {
+    "data/tokenharbor2api.sqlite".into()
+}
+fn default_tokens() -> String {
+    "data/tokens.json".into()
+}
+fn default_telemetry() -> String {
+    "data/telemetry.sqlite".into()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_conc() -> usize {
+    1
+}
+fn default_conc3() -> usize {
+    3
+}
+fn default_conc8() -> usize {
+    8
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -128,15 +154,29 @@ impl Config {
             Config::default()
         };
         // 环境变量覆盖
-        if let Ok(v) = std::env::var("LISTEN_ADDR") { cfg.listen_addr = v; }
-        if let Ok(v) = std::env::var("UPSTREAM_BASE_URL") { cfg.upstream_base_url = v; }
+        if let Ok(v) = std::env::var("LISTEN_ADDR") {
+            cfg.listen_addr = v;
+        }
+        if let Ok(v) = std::env::var("UPSTREAM_BASE_URL") {
+            cfg.upstream_base_url = v;
+        }
         if let Ok(v) = std::env::var("AUTH_TOKENS") {
-            cfg.auth_tokens = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            cfg.auth_tokens = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
         if let Ok(v) = std::env::var("API_KEYS") {
-            cfg.api_keys = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            cfg.api_keys = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
-        if let Ok(v) = std::env::var("HTTP_PROXY") { cfg.http_proxy = v; }
+        if let Ok(v) = std::env::var("HTTP_PROXY") {
+            cfg.http_proxy = v;
+        }
         Ok(cfg)
     }
 
@@ -144,11 +184,19 @@ impl Config {
         #[cfg(windows)]
         {
             if let Ok(p) = std::env::var("APPDATA") {
-                let cand = PathBuf::from(&p).join("tokenharbor2api").join("config.json");
-                if cand.exists() { return Some(cand); }
+                let cand = PathBuf::from(&p)
+                    .join("tokenharbor2api")
+                    .join("config.json");
+                if cand.exists() {
+                    return Some(cand);
+                }
             }
         }
         let local = PathBuf::from("config.json");
-        if local.exists() { Some(local) } else { None }
+        if local.exists() {
+            Some(local)
+        } else {
+            None
+        }
     }
 }

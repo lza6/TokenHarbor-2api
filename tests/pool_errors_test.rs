@@ -17,10 +17,16 @@ async fn pool_add_dedupe_and_pick() {
     let cfg = tmp_config();
     let pool = WebCookiePool::new();
     pool.load(&cfg).await;
-    let c1 = pool.add_raw("sb-auth-auth-token.0=abc; th_sid=1".to_string()).await;
-    let c2 = pool.add_raw("sb-auth-auth-token.0=abc; th_sid=1".to_string()).await; // 同值去重
+    let c1 = pool
+        .add_raw("sb-auth-auth-token.0=abc; th_sid=1".to_string())
+        .await;
+    let c2 = pool
+        .add_raw("sb-auth-auth-token.0=abc; th_sid=1".to_string())
+        .await; // 同值去重
     assert_eq!(c1.id, c2.id);
-    let c3 = pool.add_raw("sb-auth-auth-token.0=xyz; th_sid=2".to_string()).await;
+    let c3 = pool
+        .add_raw("sb-auth-auth-token.0=xyz; th_sid=2".to_string())
+        .await;
     assert_ne!(c1.id, c3.id);
     assert_eq!(pool.list().await.len(), 2);
 
@@ -38,8 +44,12 @@ async fn pool_failure_cooldown() {
     let cfg = tmp_config();
     let pool = WebCookiePool::new();
     pool.load(&cfg).await;
-    let c1 = pool.add_raw("sb-auth-auth-token.0=abc; th_sid=1".to_string()).await;
-    let c2 = pool.add_raw("sb-auth-auth-token.0=xyz; th_sid=2".to_string()).await;
+    let c1 = pool
+        .add_raw("sb-auth-auth-token.0=abc; th_sid=1".to_string())
+        .await;
+    let c2 = pool
+        .add_raw("sb-auth-auth-token.0=xyz; th_sid=2".to_string())
+        .await;
     pool.record_failure(&c1.id, 401).await;
     // c1 进入冷却，pick 应返回 c2
     let picked = pool.pick(None).await;
@@ -55,7 +65,9 @@ async fn pool_success_recovers() {
     let cfg = tmp_config();
     let pool = WebCookiePool::new();
     pool.load(&cfg).await;
-    let c1 = pool.add_raw("sb-auth-auth-token.0=abc; th_sid=1".to_string()).await;
+    let c1 = pool
+        .add_raw("sb-auth-auth-token.0=abc; th_sid=1".to_string())
+        .await;
     pool.record_failure(&c1.id, 403).await;
     pool.record_success(&c1.id).await;
     let st = pool.states().await;
@@ -85,9 +97,15 @@ fn error_anthropic_shape() {
 fn error_status_mapping() {
     use axum::http::StatusCode;
     assert_eq!(ApiError::bad_request("x").status(), StatusCode::BAD_REQUEST);
-    assert_eq!(ApiError::unauthorized("x").status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        ApiError::unauthorized("x").status(),
+        StatusCode::UNAUTHORIZED
+    );
     assert_eq!(ApiError::upstream("x").status(), StatusCode::BAD_GATEWAY);
-    assert_eq!(ApiError::rate_limited("x").status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        ApiError::rate_limited("x").status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
     assert_eq!(ApiError::not_found("x").status(), StatusCode::NOT_FOUND);
 }
 
@@ -122,4 +140,3 @@ async fn session_map_reuse_and_rebuild() {
     assert_eq!(map.len().await, 1);
     assert!(map.get("thread-a").await.is_none());
 }
-

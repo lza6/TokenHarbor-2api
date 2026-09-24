@@ -35,7 +35,12 @@ pub struct CredState {
 
 impl Default for CredState {
     fn default() -> Self {
-        Self { health: 1.0, failures: 0, cooling_until: None, last_used: None }
+        Self {
+            health: 1.0,
+            failures: 0,
+            cooling_until: None,
+            last_used: None,
+        }
     }
 }
 
@@ -122,11 +127,15 @@ impl WebCookiePool {
         let mut best: Option<(f64, usize, &Credential)> = None;
         for (i, c) in creds.iter().enumerate() {
             if let Some(ex) = exclude {
-                if c.id == ex { continue; }
+                if c.id == ex {
+                    continue;
+                }
             }
             let st = states.get(&c.id).cloned().unwrap_or_default();
             if let Some(until) = st.cooling_until {
-                if until > now { continue; }
+                if until > now {
+                    continue;
+                }
             }
             let score = st.health - (i as f64) * 0.001;
             if best.as_ref().map(|(s, _, _)| score > *s).unwrap_or(true) {
@@ -167,7 +176,9 @@ impl WebCookiePool {
         let creds = self.list().await;
         let mut refreshed = 0usize;
         for cred in &creds {
-            let Some(rt) = crate::refresh::refresh_token_from_cookie(&cred.cookie) else { continue };
+            let Some(rt) = crate::refresh::refresh_token_from_cookie(&cred.cookie) else {
+                continue;
+            };
             match crate::refresh::refresh_session(&rt, proxy).await {
                 Ok(sess) => {
                     let new_cookie = crate::refresh::rebuild_cookie(&cred.cookie, &sess);
@@ -184,7 +195,10 @@ impl WebCookiePool {
                 Err(e) => {
                     // 续期失败不惩罚凭证：access_token 可能仍有效（浏览器会话），
                     // 仅 refresh_token 链失效（refresh_token_already_used 等）
-                    tracing::warn!("凭证 {} 续期失败（不影响现有 access_token 使用）: {e}", &cred.id[..8]);
+                    tracing::warn!(
+                        "凭证 {} 续期失败（不影响现有 access_token 使用）: {e}",
+                        &cred.id[..8]
+                    );
                 }
             }
         }
@@ -192,7 +206,12 @@ impl WebCookiePool {
     }
 
     /// 邮箱密码登录并入库
-    pub async fn login_email(&self, email: &str, password: &str, proxy: Option<&str>) -> anyhow::Result<Credential> {
+    pub async fn login_email(
+        &self,
+        email: &str,
+        password: &str,
+        proxy: Option<&str>,
+    ) -> anyhow::Result<Credential> {
         let sess = crate::refresh::email_login(email, password, proxy).await?;
         let cookie = format!(
             "sb-auth-auth-token.0={}; sb-auth-auth-token.1={}; th_sid={}",
@@ -213,10 +232,9 @@ impl WebCookiePool {
     }
 }
 
-
 /// 把 RefreshResponse 组装成 Supabase base64-<json> cookie 值
 fn sess_token(sess: &crate::refresh::RefreshResponse, which: u8) -> String {
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     let obj = if which == 0 {
         serde_json::json!({
             "access_token": sess.access_token,
@@ -235,5 +253,8 @@ fn sess_token(sess: &crate::refresh::RefreshResponse, which: u8) -> String {
             "token_type": sess.token_type.clone().unwrap_or_else(|| "bearer".into()),
         })
     };
-    format!("base64-{}", URL_SAFE_NO_PAD.encode(serde_json::to_vec(&obj).unwrap_or_default()))
+    format!(
+        "base64-{}",
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&obj).unwrap_or_default())
+    )
 }

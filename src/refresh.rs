@@ -9,7 +9,7 @@
 //! 用户只需登录一次、导入一次，网关长期自续。
 
 use anyhow::{anyhow, Context, Result};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 
 // Supabase 项目配置（anon key 是浏览器公开常量，非机密）
@@ -29,7 +29,11 @@ fn decode_auth0(cookie: &str) -> Option<Vec<u8>> {
             let b64 = b64.trim().trim_matches('"').to_string();
             // 修正 base64 长度（偶发截断：尝试去掉 1-3 尾字符）
             for cut in 0..=3 {
-                let candidate = if cut == 0 { b64.clone() } else { b64[..b64.len() - cut].to_string() };
+                let candidate = if cut == 0 {
+                    b64.clone()
+                } else {
+                    b64[..b64.len() - cut].to_string()
+                };
                 if let Ok(decoded) = URL_SAFE_NO_PAD.decode(candidate.as_bytes()) {
                     return Some(decoded);
                 }
@@ -89,8 +93,7 @@ pub async fn email_login(
     if let Some(p) = proxy {
         builder = builder.proxy(reqwest::Proxy::all(p)?);
     }
-    let client = builder.build()
-        .context("构造登录客户端失败")?;
+    let client = builder.build().context("构造登录客户端失败")?;
     let resp = client
         .post(&url)
         .header("apikey", SUPABASE_ANON_KEY)
@@ -105,7 +108,8 @@ pub async fn email_login(
     if !status.is_success() {
         // 401/400 带错误详情
         let detail = truncate(&text, 300);
-        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::BAD_REQUEST {
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::BAD_REQUEST
+        {
             return Err(anyhow!("登录失败: {detail}"));
         }
         return Err(anyhow!("登录请求 HTTP {status}: {detail}"));
@@ -119,10 +123,7 @@ pub async fn email_login(
 }
 
 /// 用 refresh_token 换新会话
-pub async fn refresh_session(
-    refresh_token: &str,
-    proxy: Option<&str>,
-) -> Result<RefreshResponse> {
+pub async fn refresh_session(refresh_token: &str, proxy: Option<&str>) -> Result<RefreshResponse> {
     let url = format!("{SUPABASE_AUTH_URL}/auth/v1/token?grant_type=refresh_token");
     let mut builder = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
@@ -130,8 +131,7 @@ pub async fn refresh_session(
     if let Some(p) = proxy {
         builder = builder.proxy(reqwest::Proxy::all(p)?);
     }
-    let client = builder.build()
-        .context("构造刷新客户端失败")?;
+    let client = builder.build().context("构造刷新客户端失败")?;
     let resp = client
         .post(&url)
         .header("apikey", SUPABASE_ANON_KEY)
@@ -186,5 +186,9 @@ fn encode_json(v: &serde_json::Value) -> String {
 }
 
 fn truncate(s: &str, n: usize) -> String {
-    if s.len() <= n { s.to_string() } else { format!("{}...", &s[..n]) }
+    if s.len() <= n {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..n])
+    }
 }

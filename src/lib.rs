@@ -15,15 +15,13 @@ pub mod api;
 pub mod config;
 pub mod errors;
 pub mod models;
-pub mod refresh;
 pub mod protocol;
+pub mod refresh;
+pub mod semaphore;
+pub mod session;
 pub mod upstream;
 pub mod web;
 pub mod web_pool;
-pub mod semaphore;
-pub mod session;
 
 pub const APP_NAME: &str = "tokenharbor2api";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-

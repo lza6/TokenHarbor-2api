@@ -1,20 +1,21 @@
 //! TokenHarbor2API 网关入口
 
+use std::sync::Arc;
+use std::time::Duration;
 use tokenharbor2api::api::{build_router, AppState};
 use tokenharbor2api::config::Config;
 use tokenharbor2api::models::ModelRegistry;
 use tokenharbor2api::session::SessionMap;
 use tokenharbor2api::upstream::UpstreamClient;
 use tokenharbor2api::web_pool::WebCookiePool;
-use std::sync::Arc;
-use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,tokenharbor2api=debug")),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("info,tokenharbor2api=debug")
+            }),
         )
         .with_target(false)
         .init();
@@ -29,21 +30,27 @@ async fn main() -> anyhow::Result<()> {
 
     // 每个凭证一个客户端（cookie 不同）；共享基础客户端用于健康检查
     let mut clients = Vec::new();
-    let base_client = Arc::new(
-        UpstreamClient::new(
-            cfg.upstream_base_url.clone(),
-            None,
-            if cfg.http_proxy.is_empty() { None } else { Some(cfg.http_proxy.clone()) },
-            Duration::from_secs(cfg.request_timeout_sec),
-        )?
-    );
+    let base_client = Arc::new(UpstreamClient::new(
+        cfg.upstream_base_url.clone(),
+        None,
+        if cfg.http_proxy.is_empty() {
+            None
+        } else {
+            Some(cfg.http_proxy.clone())
+        },
+        Duration::from_secs(cfg.request_timeout_sec),
+    )?);
     let _ = base_client;
 
     if let Some(first) = cfg.auth_tokens.first() {
         let c = UpstreamClient::new(
             cfg.upstream_base_url.clone(),
             Some(first.clone()),
-            if cfg.http_proxy.is_empty() { None } else { Some(cfg.http_proxy.clone()) },
+            if cfg.http_proxy.is_empty() {
+                None
+            } else {
+                Some(cfg.http_proxy.clone())
+            },
             Duration::from_secs(cfg.request_timeout_sec),
         )?;
         clients.push(c);
@@ -53,18 +60,32 @@ async fn main() -> anyhow::Result<()> {
         let c = UpstreamClient::new(
             cfg.upstream_base_url.clone(),
             None,
-            if cfg.http_proxy.is_empty() { None } else { Some(cfg.http_proxy.clone()) },
+            if cfg.http_proxy.is_empty() {
+                None
+            } else {
+                Some(cfg.http_proxy.clone())
+            },
             Duration::from_secs(cfg.request_timeout_sec),
         )?;
         clients.push(c);
     }
     // 其余 config 凭证
-    for t in cfg.auth_tokens.iter().skip(if !cfg.auth_tokens.is_empty() { 1 } else { 0 }) {
-        if t.is_empty() { continue; }
+    for t in cfg
+        .auth_tokens
+        .iter()
+        .skip(if !cfg.auth_tokens.is_empty() { 1 } else { 0 })
+    {
+        if t.is_empty() {
+            continue;
+        }
         match UpstreamClient::new(
             cfg.upstream_base_url.clone(),
             Some(t.clone()),
-            if cfg.http_proxy.is_empty() { None } else { Some(cfg.http_proxy.clone()) },
+            if cfg.http_proxy.is_empty() {
+                None
+            } else {
+                Some(cfg.http_proxy.clone())
+            },
             Duration::from_secs(cfg.request_timeout_sec),
         ) {
             Ok(c) => clients.push(c),
@@ -92,7 +113,10 @@ async fn main() -> anyhow::Result<()> {
     // 凭证池
     let pool = Arc::new(WebCookiePool::new());
     pool.load(&cfg).await;
-    tracing::info!("凭证池: {} 条（config + tokens.json）", pool.list().await.len());
+    tracing::info!(
+        "凭证池: {} 条（config + tokens.json）",
+        pool.list().await.len()
+    );
 
     // 会话映射
     let sessions = Arc::new(SessionMap::new());
@@ -113,7 +137,9 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                let stale = sessions2.stale(tokenharbor2api::session::SESSION_IDLE_HOURS).await;
+                let stale = sessions2
+                    .stale(tokenharbor2api::session::SESSION_IDLE_HOURS)
+                    .await;
                 for (key, binding) in &stale {
                     tracing::info!(
                         "清理空闲会话 {} (idle={}h, msgs={})",
@@ -137,7 +163,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // 启动时立即续期一次（凭证过期也能自动复活）
-    let proxy = if cfg.http_proxy.is_empty() { None } else { Some(cfg.http_proxy.clone()) };
+    let proxy = if cfg.http_proxy.is_empty() {
+        None
+    } else {
+        Some(cfg.http_proxy.clone())
+    };
     {
         let pool2 = pool.clone();
         let n = pool2.refresh_creds(proxy.as_deref()).await;

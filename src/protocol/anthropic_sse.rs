@@ -28,7 +28,9 @@ pub fn anthropic_events(
     model: &str,
     session_id: &str,
 ) -> impl Stream<Item = Result<String, ApiError>> {
-    let reader = BufReader::new(crate::protocol::stream::reader_with_bytes(upstream.bytes_stream()));
+    let reader = BufReader::new(crate::protocol::stream::reader_with_bytes(
+        upstream.bytes_stream(),
+    ));
     AnthropicTransform {
         reader: Box::pin(reader),
         model: model.to_string(),
@@ -101,7 +103,9 @@ impl Stream for AnthropicTransform {
                 }
                 Poll::Ready(Ok(_)) => {
                     let line = line.trim_end_matches('\n').trim_end_matches('\r');
-                    if line.is_empty() { continue; }
+                    if line.is_empty() {
+                        continue;
+                    }
                     if let Some(ev_name) = line.strip_prefix("event: ") {
                         self.pending_event = ev_name.trim().to_string();
                         continue;
@@ -110,7 +114,11 @@ impl Stream for AnthropicTransform {
                         if let Some(evt) = parse(data, &self.pending_event) {
                             match evt.event.as_str() {
                                 "thinking" => {
-                                    let delta = evt.json.get("delta").and_then(|v| v.as_str()).unwrap_or("");
+                                    let delta = evt
+                                        .json
+                                        .get("delta")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
                                     let frame = format!(
                                         "event: content_block_start\ndata: {}\n\nevent: content_block_delta\ndata: {}\n\n",
                                         serde_json::json!({ "type": "content_block_start", "index": 0, "content_block": { "type": "thinking", "thinking": "" } }),
@@ -119,8 +127,14 @@ impl Stream for AnthropicTransform {
                                     return Poll::Ready(Some(Ok(frame)));
                                 }
                                 "chunk" => {
-                                    let delta = evt.json.get("delta").and_then(|v| v.as_str()).unwrap_or("");
-                                    if !delta.is_empty() { self.saw_content = true; }
+                                    let delta = evt
+                                        .json
+                                        .get("delta")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    if !delta.is_empty() {
+                                        self.saw_content = true;
+                                    }
                                     let frame = format!(
                                         "event: content_block_delta\ndata: {}\n\n",
                                         serde_json::json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": delta } })
@@ -129,8 +143,16 @@ impl Stream for AnthropicTransform {
                                 }
                                 "citation" => continue,
                                 "tool_use" => {
-                                    let name = evt.json.get("name").and_then(|v| v.as_str()).unwrap_or("web_search");
-                                    let args = evt.json.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+                                    let name = evt
+                                        .json
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("web_search");
+                                    let args = evt
+                                        .json
+                                        .get("arguments")
+                                        .cloned()
+                                        .unwrap_or(serde_json::json!({}));
                                     let frame = format!(
                                         "event: content_block_start\ndata: {}\n\nevent: content_block_delta\ndata: {}\n\nevent: content_block_stop\ndata: {}\n\n",
                                         serde_json::json!({ "type": "content_block_start", "index": 1, "content_block": { "type": "tool_use", "id": format!("toolu_{}", self.session_id.chars().take(8).collect::<String>()), "name": name, "input": args } }),
@@ -140,7 +162,11 @@ impl Stream for AnthropicTransform {
                                     return Poll::Ready(Some(Ok(frame)));
                                 }
                                 "error" => {
-                                    let msg = evt.json.get("message").and_then(|v| v.as_str()).unwrap_or("上游流错误");
+                                    let msg = evt
+                                        .json
+                                        .get("message")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("上游流错误");
                                     self.finished = true;
                                     let frame = format!(
                                         "event: content_block_delta\ndata: {}\n\nevent: message_delta\ndata: {}\n\nevent: message_stop\ndata: {}\n\n",
@@ -171,7 +197,10 @@ impl Stream for AnthropicTransform {
 fn parse(data: &str, event_name: &str) -> Option<Event> {
     let json: serde_json::Value = serde_json::from_str(data).ok()?;
     let event = if event_name.is_empty() {
-        json.get("event").and_then(|v| v.as_str()).unwrap_or("message").to_string()
+        json.get("event")
+            .and_then(|v| v.as_str())
+            .unwrap_or("message")
+            .to_string()
     } else {
         event_name.to_string()
     };
@@ -182,5 +211,3 @@ struct Event {
     event: String,
     json: serde_json::Value,
 }
-
-

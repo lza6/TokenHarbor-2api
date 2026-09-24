@@ -80,7 +80,10 @@ impl SessionMap {
         // per-key 锁：同 key 并发建会话串行化
         let lock = {
             let mut locks = self.locks.lock().await;
-            locks.entry(key.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
+            locks
+                .entry(key.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
         };
         let _guard = lock.lock().await;
         // 二次检查：等锁期间可能已被其它请求创建
@@ -122,9 +125,15 @@ impl SessionMap {
     /// max_idle_hours=0 时返回按 last_active 升序（最旧在前）
     pub async fn stale(&self, max_idle_hours: i64) -> Vec<(String, SessionBinding)> {
         let now = chrono::Utc::now();
-        let mut items: Vec<(String, SessionBinding)> = self.inner.read().await.iter()
+        let mut items: Vec<(String, SessionBinding)> = self
+            .inner
+            .read()
+            .await
+            .iter()
             .filter(|(_, b)| {
-                if max_idle_hours == 0 { return true; }
+                if max_idle_hours == 0 {
+                    return true;
+                }
                 chrono::DateTime::parse_from_rfc3339(&b.last_active)
                     .map(|t| (now - t.with_timezone(&chrono::Utc)).num_hours() > max_idle_hours)
                     .unwrap_or(false)
@@ -132,12 +141,14 @@ impl SessionMap {
             .map(|(k, b)| (k.clone(), b.clone()))
             .collect();
         items.sort_by(|a, b| {
-            let ta = chrono::DateTime::parse_from_rfc3339(&a.1.last_active).map(|t| t.timestamp()).unwrap_or(0);
-            let tb = chrono::DateTime::parse_from_rfc3339(&b.1.last_active).map(|t| t.timestamp()).unwrap_or(0);
+            let ta = chrono::DateTime::parse_from_rfc3339(&a.1.last_active)
+                .map(|t| t.timestamp())
+                .unwrap_or(0);
+            let tb = chrono::DateTime::parse_from_rfc3339(&b.1.last_active)
+                .map(|t| t.timestamp())
+                .unwrap_or(0);
             ta.cmp(&tb)
         });
         items
     }
 }
-
-
