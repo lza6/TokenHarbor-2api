@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.2.5 (2026-09-24)
+
+### 新增 — Web 面板门锁（防公网裸奔）
+
+- `config.json` 新增 `ui_password`（空 = UI 不锁；设置后 `/` 与 `/ui` 需登录）
+- `POST /api/ui/login`：常数时间密码校验 → 签发 HMAC-SHA256 签名 session cookie
+- session cookie：`th_ui_session`，HttpOnly + SameSite=Lax + 7 天有效期
+- 未登录访问 `/ui` → 返回暗色登录页（内嵌密码表单，回车提交）
+- 新增 `src/ui_auth.rs`（issue_token / check_session / LOGIN_HTML）
+
+### 真实 E2E 验证（2026-09-24，本地 47830）
+
+- 未登录访问 /ui → 200 登录页（含密码框）
+- 错误密码 → 401
+- 正确密码 → 200 + set-cookie th_ui_session
+- 带 cookie 访问 /ui → 200 主面板
+- 22/22 测试通过，clippy -D warnings 全绿
+
 ## v0.2.4 (2026-09-24)
 
 ### 新增 — 凭证导入多格式自动识别 + 续期诊断

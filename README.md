@@ -8,6 +8,19 @@ TokenHarbor2API 把 [TokenHarbor](https://tokenharbor.ai) 免费层的模型逆�
 
 ## 一、快速开始（3 步）
 
+### Web 面板门锁（必须配置）
+
+公网部署前务必在 `config.json` 设置 `ui_password`，否则任何人访问 `http://IP/ui` 都能打开管理面板：
+
+```json
+{ "ui_password": "你的管理密码" }
+```
+
+- 设置后，`/` 与 `/ui` 显示登录页，`POST /api/ui/login {password}` 校验 → 签发 7 天 session cookie
+- 密码错误返回 401；会话 HttpOnly + SameSite=Lax（防 XSS/CSRF 读取）
+- 为空则不锁（仅建议纯本地使用）
+
+
 ### 第 1 步：编译
 
 ```bash
