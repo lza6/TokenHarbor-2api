@@ -85,11 +85,16 @@ kbd { background:#1c2530; border:1px solid var(--border); border-radius:4px; pad
 <!-- 凭证 -->
 <section id="tab-tokens" style="display:none">
   <div class="panel"><h2>导入 TokenHarbor Cookie</h2>
-    <p class="empty">在浏览器登录 tokenharbor.ai → F12 → Network → 请求头里复制完整 <kbd>cookie:</kbd> 整行（含 <kbd>sb-auth-auth-token.0</kbd> / <kbd>sb-auth-auth-token.1</kbd> / <kbd>th_sid</kbd>）粘贴到下面。</p>
+    <p class="empty">提时任不称祝浓医不能意务：<br>
+      &#160;;1. 裁昏Cookie 头在（F12 Network 评水夹条的<kbd>cookie:</kbd> 数为）；<br/>
+      &#160;;2. curl 复份;（<kbd>-b</kbd> 或（<kbd>-H</kbd> 'Cookie: ...'开发）；<br/>
+      &#160;;3. HAR 文件（导出 大下定）；<br/>
+      &#160;;4. Netscape cookie jar 业 Chromium/Firefox JSON 导出！<br/>
+      注意：向 <kbd>sb-auth-auth-token.0</kbd> 的证换才能或自动卡碌；否则过期后需重问展界当用幕化。</p>
     <textarea id="cookie-input" placeholder="sb-auth-auth-token.0=...; sb-auth-auth-token.1=...; th_sid=..."></textarea>
     <div class="row" style="margin-top:10px"><button onclick="importCookie()">导入凭证</button></div>
   </div>
-  <div class="panel"><h2>凭证列表</h2><table><thead><tr><th>ID</th><th>标签</th><th>Cookie（掩码）</th><th>健康分</th><th>失败</th><th>操作</th></tr></thead><tbody id="tokens-tbody"></tbody></table></div>
+  <div class="panel"><h2>凭证列表</h2><table><thead><tr><th>ID</th><th>标签</th><th>Cookie（掩码）</th><th>健康分</th><th>续期</th><th>失败</th><th>操作</th></tr></thead><tbody id="tokens-tbody"></tbody></table></div>
 </section>
 
 <!-- 模型 -->
@@ -155,17 +160,17 @@ async function loadTokens() {
     $('#hcreds').textContent = (d.tokens || []).length;
     $('#tokens-tbody').innerHTML = (d.tokens || []).map(t => `<tr>
       <td><kbd>${t.id.slice(0,8)}</kbd></td><td>${esc(t.label)}</td><td><kbd>${esc(t.cookie_masked)}</kbd></td>
-      <td>${(t.health*100).toFixed(0)}%</td><td>${t.failures}</td>
+      <td>${(t.health*100).toFixed(0)}%</td><td><span class="badge ${t.refreshable ? 'ok' : 'dim'}">${t.refreshable ? '可续期' : '需重登'}</span></td><td>${t.failures}</td>
       <td class="row"><button class="sm ghost" onclick="checkToken('${t.id}')">检查</button><button class="sm ghost" style="color:var(--err)" onclick="delToken('${t.id}')">删除</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty">还没有凭证</td></tr>';
   } catch (e) { toast('凭证加载失败: ' + e.message); }
 }
 async function importCookie() {
   const cookie = $('#cookie-input').value.trim();
-  if (!cookie) return toast('请先粘贴 Cookie');
+  if (!cookie) return toast('请先粘贴 Cookie / curl / HAR / jar');
   try {
     const d = await API('/api/tokens/import', { method: 'POST', body: JSON.stringify({ cookie }) });
     $('#cookie-input').value = '';
-    toast('导入成功: ' + d.id.slice(0,8));
+    toast('导入成功: ' + d.id.slice(0,8) + ' | ' + (d.hint || ''));
     loadTokens(); loadOverview();
   } catch (e) { toast('导入失败: ' + e.message); }
 }

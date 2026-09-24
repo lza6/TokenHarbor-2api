@@ -811,6 +811,8 @@ async fn handle_tokens_list(State(state): State<AppState>, headers: HeaderMap) -
                 "cookie_masked": mask_cookie(&c.cookie),
                 "health": st.health,
                 "failures": st.failures,
+                "refreshable": crate::refresh::refresh_token_from_cookie(&c.cookie).is_some(),
+                "expires_at": crate::refresh::expires_at_from_cookie(&c.cookie),
             })
         })
         .collect();
@@ -828,33 +830,36 @@ async fn handle_tokens_import(
     State(state): State<AppState>,
     Json(body): Json<TokenImportRequest>,
 ) -> Response {
-    let cookie = body.cookie.unwrap_or_default().trim().to_string();
-    if cookie.is_empty() {
+    let raw = body.cookie.unwrap_or_default();
+    if raw.trim().is_empty() {
         return api_err_response(ApiError::bad_request(
-            "cookie 不能为空（粘贴 sb-auth-auth-token 等整行）",
+            "cookie 不能为空：支持裸 Cookie 头 / curl -b / curl -H / HAR / cookie jar / JSON 导出",
         ));
     }
-    // 规范化：直接从请求粘贴的完整 Cookie 头（可能带 "Cookie: " 前缀）里提取有效对
-    let cookie = normalize_cookie(&cookie);
+    // 自动识别多种格式：裸 Cookie | curl -b | curl -H | HAR | Netscape jar | Chromium/Firefox JSON
+    let cookie = match crate::import_parse::extract_cookie(&raw) {
+        Some(c) if !c.is_empty() => c,
+        _ => {
+            return api_err_response(ApiError::bad_request(
+                "无法从输入识别 Cookie：请粘贴 sb-auth-auth-token 等完整 Cookie 行、curl -b 命令、HAR 文件或 cookie jar",
+            ));
+        }
+    };
     let cred = state.pool.add_raw(cookie).await;
-    Json(json!({ "ok": true, "id": cred.id, "label": cred.label })).into_response()
-}
-
-fn normalize_cookie(raw: &str) -> String {
-    let trimmed = raw.trim();
-    // 去掉 curl 导入里的 -b "^"cookie...^" 形式
-    let trimmed = trimmed
-        .trim_start_matches("Cookie:")
-        .trim()
-        .trim_matches('^')
-        .trim_matches('"');
-    // 空过滤：保留 name=value 对
-    trimmed
-        .split(';')
-        .map(|p| p.trim())
-        .filter(|p| p.contains('='))
-        .collect::<Vec<_>>()
-        .join("; ")
+    let refreshable = crate::refresh::refresh_token_from_cookie(&cred.cookie).is_some();
+    let expires_at = crate::refresh::expires_at_from_cookie(&cred.cookie);
+    Json(json!({
+        "ok": true,
+        "id": cred.id,
+        "label": cred.label,
+        "refreshable": refreshable,
+        "expires_at": expires_at,
+        "hint": if refreshable {
+            "该凭证包含 refresh_token，网关会自动续期（每 50 分钟），无需重新登录"
+        } else {
+            "未检测到 sb-auth-auth-token.0 中的 refresh_token：该凭证过期后需重新登录导入新 Cookie（或改用邮箱密码 /api/tokens/login 自动入库）"
+        },
+    })).into_response()
 }
 
 #[derive(Debug, Deserialize)]
