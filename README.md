@@ -70,7 +70,27 @@ curl -X POST http://127.0.0.1:47830/api/tokens/login \
 
 网关启动时 + 每 50 分钟自动用 refresh_token 换新 access_token（`POST /api/tokens/refresh-all` 可手动触发）。续期后仅保留 `token.0`（移除 `token.1`，上游实测带 token.1 的续期 cookie 会 401），**真实 E2E 已验证续期后对话正常**，无需重复登录。
 
-> ⚠️ refresh_token 是一次性的（Supabase 特性）：被浏览器或网关用过一次后即失效（`refresh_token_already_used`）。此时 access_token 可能仍有效（可继续请求），但到期后需重新登录拿新会话。**方式 C：启动自动续期（已验证闭环）**
+> ⚠️ refresh_token 是一次性的（Supabase 特性）：被浏览器或网关用过一次后即失效（`refresh_token_already_used`）。此时 access_token 可能仍有效（可继续请求），但到期后需重新登录拿新会话。
+
+### 自动续期正确用法（关键！避免每次重新登录）
+
+**核心规则：导入 cookie 后立即关闭 tokenharbor.ai 浏览器标签。**
+
+原因：TokenHarbor 前端用 Supabase SDK 也会每小时自动刷新 token。若浏览器标签还开着，前端和网关会**竞争消费同一个 refresh_token** → 网关刷新报 `refresh_token_already_used` → 1 小时后 access_token 过期就失效。
+
+正确闭环：
+1. 登录 tokenharbor.ai → 抓 HAR/Cookie → 导入网关（`refreshable=true`）
+2. **关掉 tokenharbor.ai 标签页**（前端不再刷新）
+3. 网关每 50 分钟自动用 refresh_token 换新（写回新 refresh_token → 链式延续，永久有效）
+4. 也可用 `POST /api/tokens/login`（邮箱密码）→ 网关直接登录并独占管理，彻底不依赖浏览器
+
+### TH-Rudder 免费无限模型
+
+`th-rudder:free` 是 TokenHarbor Chat 站默认模型，**所有用户免费、不占滚动免费额度、无限使用**（官方活动）。网关已支持：
+- 默认模型 `default_model: th-rudder:free`（config.json 可改）
+- 任何付费模型请求失败时自动回退到 th-rudder:free
+- 走免费并发通道（`concurrency_free_slots: 1`）
+**方式 C：启动自动续期（已验证闭环）**
 
 网关启动时 + 每 50 分钟自动用 refresh_token 换新 access_token（`POST /api/tokens/refresh-all` 可手动触发）。续期后仅保留 `token.0`（移除 `token.1`，上游实测带 token.1 的续期 cookie 会 401），**真实 E2E 已验证续期后对话正常**，无需重复登录。
 
