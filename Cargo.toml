@@ -21,6 +21,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 futures = "0.3"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
+hmac = "0.12"
+sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "gzip", "brotli", "socks", "multipart", "cookies"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

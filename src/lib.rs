@@ -20,6 +20,7 @@ pub mod protocol;
 pub mod refresh;
 pub mod semaphore;
 pub mod session;
+pub mod ui_auth;
 pub mod upstream;
 pub mod web;
 pub mod web_pool;

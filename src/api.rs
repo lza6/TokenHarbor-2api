@@ -43,6 +43,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/tokens/refresh-all", post(handle_tokens_refresh_all))
         .route("/api/tokens/delete", post(handle_tokens_delete))
         .route("/api/tokens/check", post(handle_tokens_check))
+        .route("/api/ui/login", post(handle_ui_login))
         .route("/api/guide", get(handle_guide))
         .route("/api/config/api-key", post(handle_config_api_key))
         .route("/api/me/free-tier", get(handle_me_free_tier))
@@ -90,8 +91,66 @@ fn check_api_key(
 
 // ---------- 面板 ----------
 
-async fn handle_dashboard() -> Html<String> {
-    Html(crate::web::INDEX_HTML.to_string())
+/// Web UI 登录页（内嵌最小密码表单）
+async fn handle_dashboard(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    // 未配置 ui_password → 不锁，直接放行
+    if state.cfg.ui_password.is_empty() {
+        return Html(crate::web::INDEX_HTML.to_string()).into_response();
+    }
+    // 已配置 → 校验 session cookie
+    let ok = headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .map(|ck| crate::ui_auth::check_session(ck, &state.cfg.ui_password))
+        .unwrap_or(false);
+    if ok {
+        return Html(crate::web::INDEX_HTML.to_string()).into_response();
+    }
+    // 未登录 → 返回登录页
+    Response::builder()
+        .status(200)
+        .header("content-type", "text/html; charset=utf-8")
+        .body(axum::body::Body::from(
+            crate::ui_auth::LOGIN_HTML.to_string(),
+        ))
+        .unwrap()
+}
+
+/// Web UI 登录：POST /api/ui/login {password} → 设置 session cookie
+async fn handle_ui_login(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    if state.cfg.ui_password.is_empty() {
+        return api_err_response(ApiError::bad_request("UI 未配置密码，无需登录"));
+    }
+    let pass = body
+        .get("password")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    // 常数时间比较
+    let a = pass.as_bytes();
+    let b = state.cfg.ui_password.as_bytes();
+    let mut diff = (a.len() as u64) ^ (b.len() as u64);
+    for i in 0..a.len().max(b.len()) {
+        let av = if i < a.len() { a[i] as u64 } else { 0 };
+        let bv = if i < b.len() { b[i] as u64 } else { 0 };
+        diff |= av ^ bv;
+    }
+    if diff != 0 {
+        return api_err_response(ApiError::unauthorized("密码错误"));
+    }
+    let token = crate::ui_auth::issue_token(&state.cfg.ui_password);
+    Response::builder()
+        .status(200)
+        .header(
+            "set-cookie",
+            format!("th_ui_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800"),
+        )
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(r#"{"ok":true}"#.to_string()))
+        .unwrap()
 }
 
 async fn handle_healthz(State(state): State<AppState>) -> Json<serde_json::Value> {

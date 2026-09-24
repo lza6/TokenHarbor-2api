@@ -18,6 +18,9 @@ pub struct Config {
     /// 下游 API Key（配置后客户端必须带）
     #[serde(default)]
     pub api_keys: Vec<String>,
+    /// Web UI 门锁（空 = UI 不锁；设置后 / 和 /ui 需要登录）
+    #[serde(default)]
+    pub ui_password: String,
     /// HTTP 代理
     #[serde(default)]
     pub http_proxy: String,
@@ -118,6 +121,7 @@ impl Default for Config {
             upstream_base_url: default_upstream(),
             auth_tokens: vec![],
             api_keys: vec![],
+            ui_password: String::new(),
             http_proxy: String::new(),
             rotation_interval_sec: default_rotation(),
             request_timeout_sec: default_timeout(),
@@ -173,6 +177,9 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
+        }
+        if let Ok(v) = std::env::var("UI_PASSWORD") {
+            cfg.ui_password = v;
         }
         if let Ok(v) = std::env::var("HTTP_PROXY") {
             cfg.http_proxy = v;
