@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.2.3 (2026-09-24)
+
+### 新增 — /v1/responses 原生格式 + 多账号加权轮询
+
+- `POST /v1/responses`：OpenAI Responses API 原生格式（非流式完整 response 对象 + 流式 SSE）
+  - 流式事件链：`response.created` → `response.reasoning_summary_text.delta`（思考流）→ `response.output_text.delta`（逐字正文）→ `response.output_text.done` → `response.completed`（携带完整文本）
+  - input 支持字符串 / 消息数组；支持 `input_image` 图片附件（data URL）→ 上游 attachments
+  - 复用会话绑定 / 信号量 / 429 自动换会话 / 凭证轮换全部网关能力
+- 多账号负载均衡：`pick()` 升级为加权轮询
+  - 健康分优先；同健康分选 `last_used` 最旧（避免永远选第一个 → 多账号交替使用）
+  - 跳过冷却中 / 健康分 < 0.3 的凭证
+
+### 真实 E2E 验证（2026-09-24，浏览器真实 cookie）
+
+- `/v1/responses` 非流式：200，完整 response 对象，模型真实回答
+- `/v1/responses` 流式：27 事件，created/reasoning/delta/done/completed 全链
+- completed 事件携带完整 UTF-8 文本（你好世界）
+- `/v1/chat/completions`：200，真实回答
+- `/v1/messages`（Anthropic）：200 `type=message`
+- 多轮会话：同 user 上下文延续（记住名字→正确回答）
+- 15 并发：15/15 成功，信号量排队正确
+- 20 快速并发：15 成功 + 5 透传 429 + 日志确认自动换会话重试 6 次
+
+## v0.2.2 (2026-09-24)
 ## v0.2.2 (2026-09-24)
 
 ### 新增 — Pipeline DevOps complète

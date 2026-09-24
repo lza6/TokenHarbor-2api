@@ -79,6 +79,7 @@ print(resp.choices[0].message.content)
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/v1/chat/completions` | POST | OpenAI 聊天（流式 / 非流式） |
+| `/v1/responses` | POST | OpenAI Responses API 原生格式（流式 / 非流式） |
 | `/v1/messages` | POST | Claude 聊天（双向转换，流式为 Anthropic 事件流） |
 | `/v1/models` | GET | 可用模型列表 |
 | `/v1/uploads` | POST | 上传文件换取 storagePath（裸 body + `x-file-name` 头） |
@@ -170,6 +171,11 @@ TokenHarbor 站点（Next.js + Supabase + Vercel）核心端点：
 | 免费窗口感知 | ✅ | qwen3.8 免费至 2026-09-27，过期自动降级 |
 | 凭证池 | ✅ | 健康分 / 401 冷却 / 轮询换号 |
 | 自动续期 | ✅ | refresh_token 换新 access_token（启动 + 定时 + 手动） |
+| 多账号负载均衡 | ✅ | 加权轮询：健康分优先 + 同分最旧未使用优先（交替使用多账号） |
+| 429 自动处理 | ✅ | 会话级限流自动换新会话重试 + 账号级限流透传 429 |
+| 单账号并发控制 | ✅ | 分层信号量：免费单会话 1 / 免费多会话 3 / 付费单会话 3 / 付费多会话 8 |
+| 会话上限与清理 | ✅ | 上限 200（对齐上游），24h 空闲自动清理，per-key 互斥防并发重复建会话 |
+| `/v1/responses` | ✅ | OpenAI Responses API 原生格式（流式 SSE 全事件链 + 非流式 response 对象） |
 | 邮箱登录 | ✅ | Supabase password grant 直接登录入库 |
 | 会话复用 | ✅ | 每线程绑定上游 session，多轮上下文连续 |
 
