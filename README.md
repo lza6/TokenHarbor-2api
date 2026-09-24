@@ -59,6 +59,13 @@ curl -X POST http://127.0.0.1:47830/api/tokens/login \
    - `refreshable: false` → 未检测到 refresh_token，过期后需重新登录导入（或改用方式 A 邮箱密码）
    - 无法识别 → 400 + 提示支持的格式
 
+> [!IMPORTANT]
+> **HAR / Cookie 必须包含 `sb-auth-auth-token.0` 才能自动续期**（该 cookie 内含 refresh_token）。
+>
+> 正确抓包姿势：登录 tokenharbor.ai → F12 → Network → 勾选 **Preserve log** → 打开/刷新 **Dashboard 或 Chat 页** → 点任意 **API 请求**（URL 含 `api`，如 `/api/me/free-tier`、`/api/direct-chat/sessions`）→ 右键 **Export as HAR** → 粘贴。
+>
+> 只含静态资源（js/css/图片）的 HAR **不含登录 Cookie，无法导入**。网关会拒绝并给出指引。
+
 **方式 C：启动自动续期（已验证闭环）**
 
 网关启动时 + 每 50 分钟自动用 refresh_token 换新 access_token（`POST /api/tokens/refresh-all` 可手动触发）。续期后仅保留 `token.0`（移除 `token.1`，上游实测带 token.1 的续期 cookie 会 401），**真实 E2E 已验证续期后对话正常**，无需重复登录。

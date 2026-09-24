@@ -64,7 +64,7 @@ kbd { background:#1c2530; border:1px solid var(--border); border-radius:4px; pad
 <body>
 <header>
   <h1><span class="dot ok" id="hdot"></span>TokenHarbor2API 控制台</h1>
-  <div class="hstat"><span>模型 <b id="hmodels">-</b></span><span>凭证 <b id="hcreds">-</b></span><span>版本 <b>0.2.2</b></span></div>
+  <div class="hstat"><span>模型 <b id="hmodels">-</b></span><span>凭证 <b id="hcreds">-</b></span><span>版本 <b>__VERSION__</b></span></div>
 </header>
 <main>
 <nav>
@@ -145,7 +145,7 @@ async function loadOverview() {
     $('#ov-cards').innerHTML =
       `<div class="card"><div class="lbl">模型总数</div><div class="num">${health.models}</div></div>` +
       `<div class="card"><div class="lbl">凭证数</div><div class="num">${health.credentials}</div></div>` +
-      `<div class="card"><div class="lbl">版本</div><div class="num">0.2.2</div></div>`;
+      `<div class="card"><div class="lbl">版本</div><div class="num">__VERSION__</div></div>`;
     const guide = await API('/api/guide');
     $('#ov-guide').textContent =
 `Base URL : ${guide.base_url}

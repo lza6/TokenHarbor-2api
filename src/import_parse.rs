@@ -215,6 +215,55 @@ fn join_pairs(pairs: Vec<(String, String)>) -> String {
         .join("; ")
 }
 
+/// 分析导入的 Cookie 内容（用于导入前校验）
+pub struct CookieAnalysis {
+    /// 是否含 sb-auth-auth-token.0（登录凭证）
+    pub has_auth0: bool,
+    /// 是否含 sb-auth-auth-token.1
+    pub has_auth1: bool,
+    /// 是否含 th_sid（会话）
+    pub has_th_sid: bool,
+    /// 能否提取 refresh_token（决定能否自动续期）
+    pub refreshable: bool,
+    /// access_token 过期时间（epoch 秒）
+    pub expires_at: Option<i64>,
+    /// 检测到的 cookie 对总数
+    pub pair_count: usize,
+}
+
+/// 分析 Cookie 字符串是否具备登录/续期能力
+pub fn analyze_cookie(cookie: &str) -> CookieAnalysis {
+    let mut has_auth0 = false;
+    let mut has_auth1 = false;
+    let mut has_th_sid = false;
+    let mut pair_count = 0;
+    for part in cookie.split(';') {
+        let part = part.trim();
+        if let Some(name) = part.split('=').next() {
+            if name.is_empty() {
+                continue;
+            }
+            pair_count += 1;
+            match name {
+                "sb-auth-auth-token.0" => has_auth0 = true,
+                "sb-auth-auth-token.1" => has_auth1 = true,
+                "th_sid" => has_th_sid = true,
+                _ => {}
+            }
+        }
+    }
+    let refreshable = crate::refresh::refresh_token_from_cookie(cookie).is_some();
+    let expires_at = crate::refresh::expires_at_from_cookie(cookie);
+    CookieAnalysis {
+        has_auth0,
+        has_auth1,
+        has_th_sid,
+        refreshable,
+        expires_at,
+        pair_count,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

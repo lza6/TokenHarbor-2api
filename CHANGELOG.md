@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.2.6 (2026-09-25)
+
+### 新增 — 导入强校验（必须含 refresh_token）+ 管理端点双认证 + 版本号动态化
+
+- **HAR/Cookie 导入强校验**：
+  - 必须含 `sb-auth-auth-token.0`（登录凭证），否则 400 拒绝 + 明确指引（怎么抓正确的 HAR）
+  - 必须能提取 `refresh_token`（决定能否自动续期），否则 400 拒绝；传 `allow_partial=true` 可强制导入一次性凭证
+  - 响应新增 `has_auth0` / `has_auth1` / `has_th_sid` / `pair_count` 诊断字段
+- **管理端点双认证**：`check_admin_auth`（API Key 或 Web UI session）
+  - UI 登录后无需带 API Key 即可管理凭证/配置
+  - `/v1/*` 保持纯 API Key 校验
+  - 修复 `handle_config_api_key` 裸奔漏洞（原无任何认证）
+- **版本号动态化**：Web UI header/总览卡从写死 0.2.2 → 真实 `CARGO_PKG_VERSION`
+
+### 真实 E2E 验证
+
+- 完整 HAR（含 auth0 API 请求）→ 200 `refreshable=true`
+- 纯静态资源 HAR → 400 + 指引（"缺少登录凭证 sb-auth-auth-token.0"）
+- curl -b / 裸 Cookie（含 auth0）→ 200 `refreshable=true`
+- 残缺 cookie（仅 th_sid）→ 400 + 指引
+- resp_err_msg 完整中文引导用户重新抓正确的 HAR
+- 22/22 测试通过，clippy -D warnings 全绿
+
 ## v0.2.5 (2026-09-24)
 
 ### 新增 — Web 面板门锁（防公网裸奔）

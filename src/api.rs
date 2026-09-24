@@ -89,13 +89,37 @@ fn check_api_key(
     ))
 }
 
+/// 管理端点双认证：API Key 或 UI session cookie
+/// （UI 登录后无需再带 API Key 就能管理凭证/配置）
+fn check_admin_auth(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+    // 1) API Key 校验（与 check_api_key 相同）
+    if check_api_key(&state.cfg, &state.api_keys, headers).is_ok() {
+        return Ok(());
+    }
+    // 2) UI session cookie 校验（仅当配置了 ui_password 时）
+    if !state.cfg.ui_password.is_empty() {
+        let ok = headers
+            .get("cookie")
+            .and_then(|v| v.to_str().ok())
+            .map(|ck| crate::ui_auth::check_session(ck, &state.cfg.ui_password))
+            .unwrap_or(false);
+        if ok {
+            return Ok(());
+        }
+    }
+    Err(ApiError::unauthorized(
+        "需要 API Key 或登录 Web 面板（/ui）",
+    ))
+}
+
 // ---------- 面板 ----------
 
 /// Web UI 登录页（内嵌最小密码表单）
 async fn handle_dashboard(State(state): State<AppState>, headers: HeaderMap) -> Response {
     // 未配置 ui_password → 不锁，直接放行
     if state.cfg.ui_password.is_empty() {
-        return Html(crate::web::INDEX_HTML.to_string()).into_response();
+        let html = crate::web::INDEX_HTML.replace("__VERSION__", env!("CARGO_PKG_VERSION"));
+        return Html(html).into_response();
     }
     // 已配置 → 校验 session cookie
     let ok = headers
@@ -104,7 +128,8 @@ async fn handle_dashboard(State(state): State<AppState>, headers: HeaderMap) -> 
         .map(|ck| crate::ui_auth::check_session(ck, &state.cfg.ui_password))
         .unwrap_or(false);
     if ok {
-        return Html(crate::web::INDEX_HTML.to_string()).into_response();
+        let html = crate::web::INDEX_HTML.replace("__VERSION__", env!("CARGO_PKG_VERSION"));
+        return Html(html).into_response();
     }
     // 未登录 → 返回登录页
     Response::builder()
@@ -164,7 +189,7 @@ async fn handle_healthz(State(state): State<AppState>) -> Json<serde_json::Value
 // ---------- /v1/models ----------
 
 async fn handle_v1_models(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(e) = check_api_key(&state.cfg, &state.api_keys, &headers) {
+    if let Err(e) = check_admin_auth(&state, &headers) {
         return api_err_response(e);
     }
     let list = state.registry.all().await;
@@ -849,10 +874,13 @@ pub struct TokenImportRequest {
     pub cookie: Option<String>,
     #[serde(default)]
     pub label: Option<String>,
+    /// 允许导入不含 refresh_token 的"一次性"凭证（默认 false → 必须可续期才接受）
+    #[serde(default)]
+    pub allow_partial: bool,
 }
 
 async fn handle_tokens_list(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(e) = check_api_key(&state.cfg, &state.api_keys, &headers) {
+    if let Err(e) = check_admin_auth(&state, &headers) {
         return api_err_response(e);
     }
     let creds = state.pool.list().await;
@@ -895,28 +923,49 @@ async fn handle_tokens_import(
             "cookie 不能为空：支持裸 Cookie 头 / curl -b / curl -H / HAR / cookie jar / JSON 导出",
         ));
     }
-    // 自动识别多种格式：裸 Cookie | curl -b | curl -H | HAR | Netscape jar | Chromium/Firefox JSON
+    // 自动识别多种格式
     let cookie = match crate::import_parse::extract_cookie(&raw) {
         Some(c) if !c.is_empty() => c,
         _ => {
             return api_err_response(ApiError::bad_request(
-                "无法从输入识别 Cookie：请粘贴 sb-auth-auth-token 等完整 Cookie 行、curl -b 命令、HAR 文件或 cookie jar",
+                "无法从输入识别 Cookie：请粘贴 sb-auth-auth-token 等完整 Cookie 行、curl -b 命令、HAR 文件或 cookie jar（需包含登录后的 API 请求）",
             ));
         }
     };
+    // 校验：必须含 sb-auth-auth-token.0 且能提取 refresh_token（否则无法自动续期）
+    let analysis = crate::import_parse::analyze_cookie(&cookie);
+    if !analysis.has_auth0 {
+        return api_err_response(ApiError::bad_request(format!(
+            "导入的 HAR/Cookie 缺少登录凭证 sb-auth-auth-token.0（当前仅识别到 {} 个 cookie 对）。\n\
+             请重新在浏览器登录 tokenharbor.ai → F12 → Network → 勾选 Preserve log → 打开/刷新 Dashboard 或 Chat 页 → 点任意 API 请求（如 /api/me/free-tier、/api/direct-chat/sessions，URL 含 api 的请求）→ 右键 Export as HAR（含响应与请求头）→ 粘贴此 HAR。\n\
+             仅含静态资源(js/css/图片)的 HAR 不含登录 Cookie，无法导入。",
+            analysis.pair_count
+        )));
+    }
+    if !analysis.refreshable && !body.allow_partial {
+        return api_err_response(ApiError::bad_request(
+            "导入的 Cookie 缺少 refresh_token（sb-auth-auth-token.0 内无有效 refresh_token），无法自动续期，过期后需重新登录。\n\
+            检查：1) 该 Cookie 是否已过期（refresh_token 一次性，被浏览器/网关用过后即失效）；2) 是否从登录后的 API 请求抓取。\n\
+            如需临时使用（不自动续期），传 allow_partial=true 强制导入。",
+        ));
+    }
     let cred = state.pool.add_raw(cookie).await;
-    let refreshable = crate::refresh::refresh_token_from_cookie(&cred.cookie).is_some();
-    let expires_at = crate::refresh::expires_at_from_cookie(&cred.cookie);
+    let refreshable = analysis.refreshable;
+    let expires_at = analysis.expires_at;
     Json(json!({
         "ok": true,
         "id": cred.id,
         "label": cred.label,
         "refreshable": refreshable,
         "expires_at": expires_at,
+        "has_auth0": analysis.has_auth0,
+        "has_auth1": analysis.has_auth1,
+        "has_th_sid": analysis.has_th_sid,
+        "pair_count": analysis.pair_count,
         "hint": if refreshable {
-            "该凭证包含 refresh_token，网关会自动续期（每 50 分钟），无需重新登录"
+            "导入成功：凭证包含 refresh_token，网关每 50 分钟自动续期，无需重新登录"
         } else {
-            "未检测到 sb-auth-auth-token.0 中的 refresh_token：该凭证过期后需重新登录导入新 Cookie（或改用邮箱密码 /api/tokens/login 自动入库）"
+            "警告：该凭证不含 refresh_token，无法自动续期；过期后需重新登录导入新 Cookie（或改用 /api/tokens/login 邮箱密码）"
         },
     })).into_response()
 }
@@ -1008,7 +1057,7 @@ async fn handle_tokens_check(
 // ---------- 面板/配置 ----------
 
 async fn handle_guide(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(e) = check_api_key(&state.cfg, &state.api_keys, &headers) {
+    if let Err(e) = check_admin_auth(&state, &headers) {
         return api_err_response(e);
     }
     let models = state.registry.all().await;
@@ -1035,8 +1084,12 @@ pub struct ApiKeyAction {
 
 async fn handle_config_api_key(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<ApiKeyAction>,
 ) -> Response {
+    if let Err(e) = check_admin_auth(&state, &headers) {
+        return api_err_response(e);
+    }
     let Ok(mut keys) = state.api_keys.write() else {
         return api_err_response(ApiError::internal("锁错误"));
     };
@@ -1067,7 +1120,7 @@ async fn handle_config_api_key(
 // ---------- 上游直通（面板需要） ----------
 
 async fn handle_me_free_tier(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(e) = check_api_key(&state.cfg, &state.api_keys, &headers) {
+    if let Err(e) = check_admin_auth(&state, &headers) {
         return api_err_response(e);
     }
     let Some(cred) = state.pool.pick(None).await else {
@@ -1083,7 +1136,7 @@ async fn handle_me_free_tier(State(state): State<AppState>, headers: HeaderMap) 
 }
 
 async fn handle_me_quotas(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(e) = check_api_key(&state.cfg, &state.api_keys, &headers) {
+    if let Err(e) = check_admin_auth(&state, &headers) {
         return api_err_response(e);
     }
     let Some(cred) = state.pool.pick(None).await else {
@@ -1110,7 +1163,7 @@ async fn handle_upstream_create_session(
     headers: HeaderMap,
     Json(body): Json<UpstreamSessionReq>,
 ) -> Response {
-    if let Err(e) = check_api_key(&state.cfg, &state.api_keys, &headers) {
+    if let Err(e) = check_admin_auth(&state, &headers) {
         return api_err_response(e);
     }
     let Some(cred) = state.pool.pick(None).await else {
@@ -1144,7 +1197,7 @@ async fn handle_upstream_upload(
     headers: HeaderMap,
     Json(body): Json<UploadRequest>,
 ) -> Response {
-    if let Err(e) = check_api_key(&state.cfg, &state.api_keys, &headers) {
+    if let Err(e) = check_admin_auth(&state, &headers) {
         return api_err_response(e);
     }
     let Some(cred) = state.pool.pick(None).await else {
@@ -1174,7 +1227,7 @@ async fn handle_v1_uploads(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    if let Err(e) = check_api_key(&state.cfg, &state.api_keys, &headers) {
+    if let Err(e) = check_admin_auth(&state, &headers) {
         return api_err_response(e);
     }
     let name = headers
