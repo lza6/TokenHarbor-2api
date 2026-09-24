@@ -198,7 +198,23 @@ TokenHarbor 站点（Next.js + Supabase + Vercel）核心端点：
 
 ---
 
-## 七、免责声明
+## 七、CI/CD（DevOps）
+
+完整流水线见 [docs/DEVOPS.md](docs/DEVOPS.md)。
+
+```
+Build → Qualité (fmt+clippy) → Tests (coverage≥20%) → Sécurité (audit+gitleaks) → Déploiement → Notifications
+```
+
+- **CI** : `.github/workflows/ci.yml`（6 jobs）
+- **Déploiement** : staging auto (develop) / production approbation (main) / rollback
+- **Docker** : GHCR multi-arch (amd64+arm64)
+- **Sécurité** : cargo-audit (243 crates ✓) + gitleaks + clippy SAST
+
+> Note : l''exécution runner GitHub nécessite un compte avec Actions activé.
+> La limite de facturation du compte peut bloquer le démarrage des jobs (pas la config).
+
+## 八、免责声明
 
 本项目与 OpenAI、TokenHarbor 无官方关联，相关商标版权归各自所有者。
 所有内容仅供交流、实验与学习使用，按「原样（As-Is）」提供，使用者自行承担风险。

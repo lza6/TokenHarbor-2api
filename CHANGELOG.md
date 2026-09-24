@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.2.2 (2026-09-24)
+
+### 新增 — Pipeline DevOps complète
+
+- ci.yml : 6 jobs (Build Windows / Qualité fmt+clippy / Tests coverage≥20% / Sécurité audit+gitleaks+SAST / Release on tag / Notifications Slack)
+- deploy.yml : staging auto (develop) + production approbation manuelle (main/tag, GitHub Environments) + rollback (workflow_dispatch)
+- docker.yml : GHCR multi-arch (amd64+arm64) sur main/develop/tag
+- .gitleaks.toml : exclusions scan secrets
+- docs/DEVOPS.md : schéma ASCII, stratégie branches, secrets, troubleshooting
+
+### Vérification locale (2026-09-24)
+
+- cargo fmt --check : passe
+- cargo clippy --all-targets -- -D warnings : passe (zéro lint)
+- cargo test --lib --tests : 14/14 OK
+- cargo llvm-cov : couverture 20.40% (models 81%, errors 66%, web_pool 53%)
+- cargo audit : 243 crates, 0 vulnérabilité
+
+### Note CI
+
+- Les workflows sont poussés et déclenchés ; l''exécution runner est bloquée par la limite de facturation GitHub du compte (billing), pas par la configuration.
+
+## v0.2.1 (2026-09-24)
+
+### Production hardening
+
+- 429 rate-limit auto-switch session + transmission 429 correcte
+- Refresh failure ne refroidit plus les credentials par erreur
+- Sémaphore de concurrence + mutex de création de session
+- Limite 200 sessions + nettoyage automatique 24h
+- Fenêtres de contexte réelles (DeepSeek 1M/384K, Qwen 256K...)
+
 ## v0.2.0 (2026-09-24)
 
 ### 新增
